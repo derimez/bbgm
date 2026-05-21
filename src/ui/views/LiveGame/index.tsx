@@ -2,6 +2,7 @@ import clsx from "clsx";
 import {
 	Component,
 	type ChangeEvent,
+	type CSSProperties,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -34,6 +35,110 @@ import {
 import { Confetti } from "./Confetti.tsx";
 import { BoxScoreRow } from "../../components/BoxScoreRow.tsx";
 import { getPeriodName } from "../../../common/getPeriodName.ts";
+
+// Phase 3 simcast: inline iframe of the live court view. The simcast page is
+// fully self-contained (loads its own Pixi, listens to /api/simcast WS for the
+// gameStart packet that processLiveGameEvents fires when this view mounts).
+//
+// Fullscreen: tries native Fullscreen API; falls back to a CSS-based fake-FS
+// (fixed-position cover) because iOS Safari restricts the real API to <video>
+// elements — and Add-to-Home-Screen PWAs there have no API at all.
+const SimcastPanel = () => {
+	const wrapRef = useRef<HTMLDivElement | null>(null);
+	const [collapsed, setCollapsed] = useState(false);
+	const [fakeFs, setFakeFs] = useState(false);
+
+	const toggleFullscreen = useCallback(() => {
+		const el = wrapRef.current;
+		if (!el) return;
+		// If we're in fake-FS, exit out.
+		if (fakeFs) {
+			setFakeFs(false);
+			return;
+		}
+		// If real FS is active, exit out.
+		if (document.fullscreenElement) {
+			document.exitFullscreen().catch(() => {});
+			return;
+		}
+		// Try real FS first. On iOS Safari this will reject (or be missing
+		// entirely) — fall back to CSS fake-FS in that case.
+		const req = el.requestFullscreen?.bind(el);
+		if (req) {
+			req().catch(() => setFakeFs(true));
+		} else {
+			setFakeFs(true);
+		}
+	}, [fakeFs]);
+
+	// Keep React state in sync if user exits real FS via Esc / system gesture.
+	useEffect(() => {
+		const onChange = () => {
+			if (!document.fullscreenElement && fakeFs) setFakeFs(false);
+		};
+		document.addEventListener("fullscreenchange", onChange);
+		return () => document.removeEventListener("fullscreenchange", onChange);
+	}, [fakeFs]);
+
+	const wrapStyle: CSSProperties = fakeFs
+		? {
+				position: "fixed",
+				inset: 0,
+				zIndex: 9999,
+				margin: 0,
+				borderRadius: 0,
+				background: "#0c0e12",
+				display: "flex",
+				flexDirection: "column",
+				// Respect iOS notch / home indicator in fake-FS PWA mode.
+				paddingTop: "env(safe-area-inset-top)",
+				paddingBottom: "env(safe-area-inset-bottom)",
+			}
+		: {};
+	const iframeStyle: CSSProperties = fakeFs
+		? {
+				display: "block",
+				flex: "1 1 auto",
+				width: "100%",
+				height: "100%",
+				border: 0,
+			}
+		: {
+				display: "block",
+				width: "100%",
+				aspectRatio: "94 / 50",
+				border: 0,
+			};
+
+	return (
+		<div className="card mb-3" ref={wrapRef} style={wrapStyle}>
+			<div className="card-header py-1 px-2 d-flex align-items-center">
+				<span className="fw-bold text-body-secondary small">Simcast</span>
+				<div className="ms-auto btn-group btn-group-sm">
+					<button
+						type="button"
+						className="btn btn-light-bordered"
+						title={collapsed ? "Expand" : "Collapse"}
+						onClick={() => setCollapsed((c) => !c)}
+					>
+						{collapsed ? "Show" : "Hide"}
+					</button>
+					<button
+						type="button"
+						className="btn btn-light-bordered"
+						title={fakeFs ? "Exit full screen" : "Full screen"}
+						onClick={toggleFullscreen}
+					>
+						{fakeFs ? "✕" : "⛶"}
+					</button>
+				</div>
+			</div>
+			{collapsed && !fakeFs ? null : (
+				<iframe src="/simcast?embedded=1" title="Simcast" style={iframeStyle} />
+			)}
+		</div>
+	);
+};
 
 type PlayerRowProps = {
 	exhibition?: boolean;
@@ -1079,6 +1184,9 @@ export const LiveGame = (props: View<"liveGame">) => {
 								</div>
 							</div>
 						</div>
+					) : null}
+					{boxScore.current.gid >= 0 && isSport("basketball") ? (
+						<SimcastPanel />
 					) : null}
 					{boxScore.current.gid >= 0 ? (
 						<BoxScoreWrapper

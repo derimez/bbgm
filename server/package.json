@@ -1,0 +1,14 @@
+{
+	"name": "bbgm-server",
+	"version": "1.0.0",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"start": "node index.js"
+	},
+	"dependencies": {
+		"better-sqlite3": "^11.9.1",
+		"express": "^5.1.0",
+		"ws": "^8.18.2"
+	}
+}

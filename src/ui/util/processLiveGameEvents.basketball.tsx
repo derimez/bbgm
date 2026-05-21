@@ -24,6 +24,45 @@ let playersByPid:
 	  >
 	| undefined;
 
+// Phase 3 simcast broadcast — on the init event we ship the ENTIRE upcoming
+// event list to the simcast viewer in one packet. Simcast plays through them
+// with full lookahead so player motion can span the real inter-event interval
+// (a shooter is moving toward the elbow before the shot event fires, etc.).
+// The worker stays silent; only the UI fires this, on the user-triggered
+// Watch-Live mount.
+const simcastBroadcast = (e: any, boxScore: any, events: any[]) => {
+	if (typeof fetch === "undefined") return;
+	if (e.type !== "init") return;
+	try {
+		// Filter "stat" entries — they're BBGM's per-stat increments alongside
+		// real plays; simcast derives its own running totals from the play events.
+		const fullGame = events.filter((ev: any) => ev?.type !== "stat");
+		fetch("/api/sim-game-start", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				gid: boxScore.gid,
+				season: boxScore.season,
+				day: boxScore.day,
+				teams: [0, 1].map((t) => ({
+					tid: boxScore.teams[t].tid,
+					abbrev: boxScore.teams[t].abbrev,
+					region: boxScore.teams[t].region,
+					name: boxScore.teams[t].name,
+					colors: boxScore.teams[t].colors,
+					players: (boxScore.teams[t].players ?? []).map((p: any) => ({
+						pid: p.pid,
+						name: p.name,
+						pos: p.pos,
+					})),
+				})),
+				events: fullGame,
+			}),
+			keepalive: true,
+		}).catch(() => {});
+	} catch {}
+};
+
 const getName = (pid: number) => {
 	return playersByPid?.[pid]?.name ?? "???";
 };
@@ -424,6 +463,8 @@ const processLiveGameEvents = ({
 		if (!e) {
 			continue;
 		}
+
+		simcastBroadcast(e, boxScore, events);
 
 		const eAny = e as any;
 

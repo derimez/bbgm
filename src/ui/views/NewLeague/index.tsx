@@ -54,6 +54,7 @@ import { realtimeUpdate } from "../../util/realtimeUpdate.ts";
 import { applyRealTeamInfo } from "../../../common/applyRealTeamInfo.ts";
 import { gameAttributesArrayToObject } from "../../../common/gameAttributesArrayToObject.ts";
 import { unwrapGameAttribute } from "../../../common/unwrapGameAttribute.ts";
+import simpleGameAttributesUpgrade from "../../../common/simpleGameAttributesUpgrade.ts";
 
 const animationVariants = {
 	visible: {
@@ -674,6 +675,16 @@ const getGenderOverride = (): GameAttributesLeague["gender"] | undefined => {
 	}
 };
 
+const getImportUrl = (): string | undefined => {
+	if (location.hash.startsWith("#importUrl=")) {
+		try {
+			return decodeURIComponent(location.hash.slice("#importUrl=".length));
+		} catch {
+			return undefined;
+		}
+	}
+};
+
 const NewLeague = (props: View<"newLeague">) => {
 	const [startingSeason, setStartingSeason] = useState(
 		String(new Date().getFullYear()),
@@ -704,6 +715,9 @@ const NewLeague = (props: View<"newLeague">) => {
 				props.type === "crossEra"
 			) {
 				customize = props.type;
+			}
+			if (getImportUrl()) {
+				customize = "custom-url";
 			}
 
 			const basicInfo = undefined;
@@ -1079,6 +1093,33 @@ const NewLeague = (props: View<"newLeague">) => {
 		if (state.customize === "crossEra") {
 			generateCrossEraTeams();
 		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, []);
+
+	// Auto-load league file when #importUrl= hash is present
+	useEffect(() => {
+		const importUrl = getImportUrl();
+		if (!importUrl) return;
+
+		dispatch({ type: "loadingLeagueFile" });
+		(async () => {
+			try {
+				const { basicInfo } = await toWorker(
+					"leagueFileUpload",
+					"initialCheck",
+					{ file: importUrl, leagueCreationID },
+				);
+				if (basicInfo?.gameAttributes) {
+					simpleGameAttributesUpgrade(
+						basicInfo.gameAttributes,
+						basicInfo.version,
+					);
+				}
+				handleNewLeagueFile(null, { basicInfo, url: importUrl });
+			} catch (err) {
+				handleNewLeagueFile(err as Error);
+			}
+		})();
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 

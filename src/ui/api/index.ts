@@ -1,5 +1,6 @@
 import { realtimeUpdate } from "../util/realtimeUpdate.ts";
 import { local, localActions } from "../util/local.ts";
+import { triggerSync } from "../util/bbgmSync.ts";
 import { showEvent } from "../util/logEvent.ts";
 import type {
 	LocalStateUI,
@@ -52,6 +53,9 @@ async function realtimeUpdate2(
 	raw?: Record<string, unknown>,
 ) {
 	await realtimeUpdate(updateEvents, url, raw);
+	if (updateEvents.includes("gameSim")) {
+		triggerSync();
+	}
 }
 
 const resetLeague = () => {

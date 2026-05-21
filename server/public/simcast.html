@@ -1,0 +1,2760 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1, viewport-fit=cover"
+		/>
+		<title>BBGM Simcast — Live</title>
+		<style>
+			:root {
+				color-scheme: dark;
+			}
+			html,
+			body {
+				margin: 0;
+				padding: 0;
+				background: #0c0e12;
+				color: #d8dde7;
+				font-family:
+					-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+			}
+			body {
+				display: flex;
+				flex-direction: column;
+				align-items: center;
+				padding: 12px 12px 24px;
+				gap: 10px;
+				min-height: 100vh;
+			}
+			/* Embedded mode: stripped chrome so it fits inside BBGM's LiveGame view. */
+			body.embedded {
+				padding: 0;
+				min-height: auto;
+				gap: 6px;
+				background: transparent;
+			}
+			body.embedded h1,
+			body.embedded > p.sub {
+				display: none;
+			}
+			body.embedded #stage {
+				border-radius: 0;
+				/* Drop the 940px cap so the court fills the entire iframe width. */
+				max-width: 100%;
+			}
+			/* BBGM's LiveGame view already shows score, clock, last-play and playback
+     controls above the iframe — hide the redundant overlay cards inside. */
+			body.embedded .overlay {
+				display: none;
+			}
+			h1 {
+				margin: 4px 0 0;
+				font-size: 18px;
+				font-weight: 600;
+				letter-spacing: 0.02em;
+			}
+			.sub {
+				margin: 0;
+				font-size: 11px;
+				color: #7c8597;
+			}
+			#connstatus {
+				display: inline-block;
+				padding: 2px 8px;
+				border-radius: 4px;
+				font-size: 10px;
+				letter-spacing: 0.08em;
+				text-transform: uppercase;
+				margin-left: 8px;
+				vertical-align: middle;
+			}
+			#connstatus.live {
+				background: #1a4d2e;
+				color: #6ee7a0;
+			}
+			#connstatus.idle {
+				background: #3a2a1a;
+				color: #f0b070;
+			}
+			#connstatus.dead {
+				background: #4a1a1a;
+				color: #ff8080;
+			}
+			#stage {
+				width: 100%;
+				position: relative;
+				max-width: min(940px, calc((100svh - 110px) * 94 / 50));
+				aspect-ratio: 94 / 50;
+				margin: 0 auto;
+				background: #0c0e12;
+				border-radius: 8px;
+				overflow: hidden;
+				box-shadow:
+					0 1px 0 #1d2230 inset,
+					0 8px 24px rgba(0, 0, 0, 0.4);
+			}
+			#stage canvas {
+				display: block;
+				width: 100% !important;
+				height: 100% !important;
+				touch-action: pan-y;
+			}
+			#idle-overlay {
+				position: absolute;
+				inset: 0;
+				display: grid;
+				place-items: center;
+				background: rgba(12, 14, 18, 0.85);
+				z-index: 5;
+				pointer-events: none;
+				color: #b9c0cf;
+				font-size: 14px;
+				text-align: center;
+				padding: 24px;
+				transition: opacity 0.3s ease;
+			}
+			#idle-overlay.hidden {
+				opacity: 0;
+			}
+			.overlay {
+				width: 100%;
+				max-width: 940px;
+				display: flex;
+				gap: 10px;
+				justify-content: space-between;
+				align-items: stretch;
+				flex-wrap: wrap;
+			}
+			.card {
+				background: #141823;
+				border: 1px solid #1d2230;
+				border-radius: 8px;
+				padding: 10px 12px;
+				flex: 1 1 200px;
+			}
+			.card h2 {
+				font-size: 10px;
+				margin: 0 0 4px;
+				text-transform: uppercase;
+				letter-spacing: 0.08em;
+				color: #7c8597;
+				font-weight: 600;
+			}
+			.clock {
+				font-variant-numeric: tabular-nums;
+				font-size: 22px;
+				font-weight: 700;
+			}
+			.play {
+				font-size: 13px;
+				color: #b9c0cf;
+				min-height: 1.2em;
+			}
+			.score {
+				display: flex;
+				gap: 14px;
+				align-items: baseline;
+			}
+			.score .team {
+				font-size: 11px;
+				color: #7c8597;
+			}
+			.score .pts {
+				font-size: 22px;
+				font-weight: 700;
+				font-variant-numeric: tabular-nums;
+			}
+			.speed {
+				display: flex;
+				align-items: center;
+				gap: 10px;
+			}
+			.speed input[type="range"] {
+				flex: 1;
+			}
+			.speed .val {
+				width: 42px;
+				text-align: right;
+				font-variant-numeric: tabular-nums;
+			}
+			.statline {
+				font-size: 11px;
+				color: #7c8597;
+				margin-top: 6px;
+				line-height: 1.5;
+			}
+			.statline b {
+				color: #b9c0cf;
+				font-weight: 600;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>BBGM Simcast — Live <span id="connstatus" class="idle">idle</span></h1>
+		<p class="sub" id="subline">Waiting for a live game…</p>
+
+		<div id="stage">
+			<div id="idle-overlay">
+				Connect to BBGM and start a live game (Tools → "Watch Live") to begin
+				streaming.
+			</div>
+		</div>
+
+		<div class="overlay">
+			<div class="card">
+				<h2>Clock</h2>
+				<div class="clock" id="clock">--:--</div>
+				<div class="sub" id="quarter">—</div>
+			</div>
+			<div class="card">
+				<h2>Last Play</h2>
+				<div class="play" id="play">—</div>
+				<div class="statline" id="teamstats">—</div>
+			</div>
+			<div class="card">
+				<h2>Score</h2>
+				<div class="score">
+					<div>
+						<div class="team" id="abbrev-home">HOME</div>
+						<div class="pts" id="score-home">0</div>
+					</div>
+					<div>
+						<div class="team" id="abbrev-away">AWAY</div>
+						<div class="pts" id="score-away">0</div>
+					</div>
+				</div>
+			</div>
+			<div class="card">
+				<h2>Speed</h2>
+				<div class="speed">
+					<input
+						type="range"
+						id="speed"
+						min="0.25"
+						max="6"
+						step="0.25"
+						value="1"
+					/>
+					<span class="val" id="speed-val">1.0×</span>
+				</div>
+			</div>
+		</div>
+
+		<script type="module">
+			import * as PIXI from "https://cdn.jsdelivr.net/npm/pixi.js@8.5.2/dist/pixi.min.mjs";
+
+			// Strip page chrome when iframed from BBGM's LiveGame view.
+			if (new URLSearchParams(location.search).get("embedded") === "1") {
+				document.body.classList.add("embedded");
+			}
+
+			// ── Court (feet) ───────────────────────────────────────────────────────────
+			const COURT = { length: 94, width: 50, basketFromBaseline: 5.25 };
+			const RIM_X = { 0: 88.75, 1: 5.25 }; // home (t=0) attacks right rim
+			const RIM_Y = 25;
+			const APRON_FT = 6; // visible apron extending past playing surface
+
+			// ── Motion physics ─────────────────────────────────────────────────────────
+			// NBA reference: top sprint ≈ 17 mph ≈ 25 ft/s; jog ≈ 10 mph ≈ 14 ft/s;
+			// dead-ball walk ≈ 5 mph ≈ 7 ft/s. Every moveTo clamps its target to what's
+			// reachable in the available time so no one teleports.
+			// Velocity caps scaled ~25% below true NBA speeds because at our zoomed-out
+			// top-down view, real-world top speeds read as teleporting. 19 ft/s feels
+			// like a sprint to the eye; 11 ft/s reads as a jog; 5.5 ft/s as a walk.
+			const MAX_FPS_BY_URGENCY = { sprint: 19, jog: 11, walk: 5.5 };
+			const MIN_DUR = 0.25; // floor on any tween duration
+			const PASS_LEAD_SEC = 0.5; // ball detaches from assister this long before make
+			const ASSIST_PASS_DIST_MIN = 15; // assister parks this far from shooter
+			const ASSIST_PASS_DIST_MAX = 22;
+
+			// Fallback palettes when a team's gameStart packet has no colors[] array
+			// (e.g. an exhibition game without per-team color overrides).
+			const DEFAULT_COLORS = {
+				home: 0x006bb6,
+				homeRing: 0xf58426, // Knicks blue + orange
+				away: 0xfdb927,
+				awayRing: 0x552583, // Lakers gold + purple
+				ball: 0xe25822,
+				bg: 0x0c0e12,
+			};
+
+			// Per-team resolved palette (primary + secondary) — populated from gameStart
+			// packet. Indexed by team slot (0 = home, 1 = away).
+			const teamColors = [
+				{ primary: DEFAULT_COLORS.home, secondary: DEFAULT_COLORS.homeRing },
+				{ primary: DEFAULT_COLORS.away, secondary: DEFAULT_COLORS.awayRing },
+			];
+
+			// Convert "#rrggbb" to 0xrrggbb; passthrough numbers; null/undefined → null
+			function parseColor(c) {
+				if (typeof c === "number") return c;
+				if (typeof c !== "string") return null;
+				const m = c.replace("#", "");
+				if (!/^[0-9a-fA-F]{6}$/.test(m)) return null;
+				return parseInt(m, 16);
+			}
+
+			// Approx height by position (drives dot radius — gameStart packet doesn't yet
+			// carry real hgt; this is the position fallback).
+			const POS_HGT = { PG: 74, SG: 78, SF: 80, PF: 82, C: 84, G: 76, F: 81 };
+			const dotRadius = (h) => 1.05 + (h - 72) * 0.06;
+
+			// Per-play role spots. Each possession picks a play type, which defines where
+			// every role lines up at shot time. Inspired by NBA actions:
+			//   set     — standard 4-out 1-in spacing
+			//   pnr     — high pick-and-roll, C at the screen, PF in the dunker spot
+			//   motion  — flatter, more even spacing with bigs higher up
+			//   post    — feed C in the low post, perimeter players spaced for the kick
+			//   iso     — clear-out one wing, others on the opposite side
+			// All coords are offensive-halfcourt (dx = distance from attacking baseline).
+			// Many spots per role — each play picks ONE per role randomly. Spots cover the
+			// full halfcourt (corners, wings, slots, elbows, blocks, dunker spot, high post),
+			// so the same 5-on-5 floor doesn't repeat possession to possession.
+			// Coords are offensive-halfcourt (dx = distance from attacking baseline).
+			const PLAY_PLAYBOOK = {
+				set: {
+					// 4-out 1-in spacing with handler variety.
+					PG: [
+						[33, 25],
+						[30, 14],
+						[30, 36],
+						[36, 22],
+					],
+					SG: [
+						[20, 6],
+						[22, 12],
+						[16, 16],
+						[27, 10],
+					],
+					SF: [
+						[20, 44],
+						[22, 38],
+						[16, 34],
+						[27, 40],
+					],
+					PF: [
+						[8, 18],
+						[14, 18],
+						[18, 22],
+						[12, 14],
+						[22, 19],
+					],
+					C: [
+						[5, 28],
+						[8, 32],
+						[6, 22],
+						[10, 30],
+					],
+				},
+				pnr: {
+					// High screen-and-roll on the strong side. C up top, PF in dunker.
+					PG: [
+						[28, 22],
+						[28, 28],
+						[32, 18],
+					],
+					SG: [
+						[18, 6],
+						[22, 10],
+					], // weak corner / wing
+					SF: [
+						[18, 44],
+						[22, 40],
+					], // strong corner / wing
+					PF: [
+						[12, 30],
+						[8, 22],
+					], // dunker / weakside block
+					C: [
+						[26, 25],
+						[24, 28],
+						[28, 22],
+					], // ball screen at the top
+				},
+				motion: {
+					// Flatter, with bigs floating to the elbow / mid-range — pick-and-pop look.
+					PG: [
+						[35, 22],
+						[30, 28],
+						[32, 14],
+					],
+					SG: [
+						[24, 10],
+						[22, 14],
+						[16, 22],
+					],
+					SF: [
+						[24, 40],
+						[22, 36],
+						[16, 28],
+					],
+					PF: [
+						[19, 18],
+						[21, 22],
+						[18, 32],
+					], // mid-range
+					C: [
+						[19, 30],
+						[22, 25],
+						[12, 18],
+					],
+				},
+				post: {
+					// Feed the C in the low post; perimeter spread for the kick.
+					PG: [
+						[34, 25],
+						[30, 18],
+					],
+					SG: [
+						[22, 6],
+						[25, 12],
+					], // weak corner / wing
+					SF: [
+						[22, 44],
+						[25, 38],
+					], // strong corner / wing
+					PF: [
+						[18, 33],
+						[22, 36],
+						[14, 14],
+					], // weakside relief
+					C: [
+						[5, 28],
+						[6, 22],
+						[7, 30],
+					], // low block
+				},
+				iso: {
+					// Clear-out a wing for one isolation attacker; everyone else on the other side.
+					PG: [
+						[18, 10],
+						[22, 14],
+						[26, 18],
+					], // wing attacker
+					SG: [
+						[30, 38],
+						[34, 32],
+					],
+					SF: [
+						[24, 44],
+						[28, 38],
+					],
+					PF: [
+						[22, 36],
+						[25, 32],
+					],
+					C: [
+						[10, 40],
+						[12, 36],
+						[14, 30],
+					],
+				},
+				flare: {
+					// Flare screen for a shooter — guards on the same side, big at top.
+					PG: [
+						[28, 36],
+						[32, 30],
+					],
+					SG: [
+						[20, 38],
+						[16, 42],
+					], // catches the flare
+					SF: [
+						[20, 10],
+						[16, 6],
+					], // weak side
+					PF: [
+						[22, 25],
+						[26, 25],
+					], // top of arc screener
+					C: [
+						[10, 22],
+						[8, 30],
+					], // dunker
+				},
+				handoff: {
+					// Dribble handoff at the elbow — handler and bigman swap roles for a beat.
+					PG: [
+						[22, 18],
+						[22, 32],
+					],
+					SG: [
+						[20, 8],
+						[18, 14],
+					],
+					SF: [
+						[20, 42],
+						[18, 36],
+					],
+					PF: [
+						[20, 22],
+						[24, 25],
+					], // hand-off setter at elbow
+					C: [
+						[10, 25],
+						[8, 30],
+					],
+				},
+			};
+			// Heavily weighted toward variety — set still common, others fill the deck.
+			const PLAY_TYPES = [
+				"set",
+				"set",
+				"pnr",
+				"pnr",
+				"motion",
+				"motion",
+				"post",
+				"iso",
+				"flare",
+				"handoff",
+			];
+
+			// Free-throw lineup. Defense takes the 2 lane spots closest to the basket;
+			// offense takes the next 2; guards split as outlets behind the 3pt line.
+			// Coords are offensive-halfcourt (offensive team = team shooting FT).
+			const FT_SPOTS_OFF = {
+				PG: [22, 25], // top of the key
+				SG: [22, 8], // corner outlet
+				SF: [22, 42], // corner outlet
+				PF: [7, 19], // high block (above defender)
+				C: [7, 31], // high block (above defender)
+			};
+			const FT_SPOTS_DEF = {
+				PG: [22, 14], // outlet wing
+				SG: [22, 36], // outlet wing
+				SF: [22, 7], // weakside corner
+				PF: [4, 20], // low block (closest to basket)
+				C: [4, 30], // low block (closest to basket)
+			};
+			// Fallback when a player's pos doesn't match (e.g. "F", "G")
+			const POS_TO_ROLE = {
+				PG: "PG",
+				SG: "SG",
+				SF: "SF",
+				PF: "PF",
+				C: "C",
+				G: "SG",
+				F: "SF",
+			};
+
+			// Map team + role to absolute offensive coords for the CURRENT play type.
+			// Team 0 attacks the right basket; team 1 attacks the left.
+			function offensiveRoleSpot(t, role, variantIdx) {
+				const play = PLAY_PLAYBOOK[currentPlay] ?? PLAY_PLAYBOOK.set;
+				const spots = play[role] ?? PLAY_PLAYBOOK.set[role] ?? [[16, 25]];
+				const [dx, dy] = spots[variantIdx % spots.length];
+				return t === 0 ? [94 - dx, dy] : [dx, dy];
+			}
+
+			// Free-throw absolute coords. `t` is the offensive team (FT shooter's team).
+			function ftRoleSpot(t, role, isOffense) {
+				const table = isOffense ? FT_SPOTS_OFF : FT_SPOTS_DEF;
+				const [dx, dy] = table[role] ?? table.SF;
+				return t === 0 ? [94 - dx, dy] : [dx, dy];
+			}
+
+			// The defended rim for team t (the one opponents attack).
+			function defendedRimX(t) {
+				return RIM_X[1 - t];
+			}
+
+			// Resolve a pid's role from the cached roster.
+			function roleOf(pid, t) {
+				const info = teams[t]?.players?.find?.((p) => p.pid === pid);
+				return POS_TO_ROLE[info?.pos ?? ""] ?? "SF";
+			}
+
+			// Random point in a region (used to scatter shot locations so the same
+			// fgaMidRange doesn't always land on the same spot).
+			function rand(lo, hi) {
+				return lo + Math.random() * (hi - lo);
+			}
+			function clamp(v, lo, hi) {
+				return v < lo ? lo : v > hi ? hi : v;
+			}
+
+			// Given a shot event type and shooting team (and shooter role, optional),
+			// pick a plausible (x,y). Role-aware constraints prevent silly placements:
+			// a Center taking a 3 stays near the top of the key (no corner 3s), and a
+			// Center "mid-range" caps at 12 ft (no 18-ft jumpers off the dribble).
+			function shotSpot(type, t, role) {
+				const rim = RIM_X[t];
+				const dir = t === 0 ? -1 : 1; // direction back from rim
+				const isBig = role === "C" || role === "PF";
+				switch (type) {
+					case "fgaAtRim":
+						return [rim + dir * rand(0.5, 3.5), rand(20, 30)];
+					case "fgaLowPost":
+						return [
+							rim + dir * rand(4, 9),
+							Math.random() < 0.5 ? rand(16, 20) : rand(30, 34),
+						];
+					case "fgaMidRange": {
+						// Centers don't hoist long mid-range — cap at 12 ft for Cs.
+						const minD = 10,
+							maxD = role === "C" ? 12 : 18;
+						return [rim + dir * rand(minD, maxD), rand(7, 43)];
+					}
+					case "fgaTp":
+					case "fgaTpFake": {
+						// Bigs taking a 3: limit to top-of-key (y in [15, 35]).
+						const yLo = isBig ? 15 : 3;
+						const yHi = isBig ? 35 : 47;
+						return [rim + dir * rand(22, 27), rand(yLo, yHi)];
+					}
+					case "fgaTipIn":
+						return [rim + dir * rand(0.5, 2.0), rand(22, 28)];
+					case "fgaPutBack":
+						return [rim + dir * rand(0.5, 4.0), rand(20, 30)];
+					case "ft":
+						return [rim + dir * 14, 25];
+					default:
+						return [rim + dir * 12, 25];
+				}
+			}
+
+			// Compute a shot's (x,y) ONCE and cache it on the event object. The planner's
+			// pre-staging target and the handler's ball-launch point must agree — without
+			// this the planner sends the shooter to spot A while the handler fires the
+			// ball from a fresh random spot B, so the ball appears to teleport.
+			function shotSpotFor(ev) {
+				if (!ev.__spot)
+					ev.__spot = shotSpot(ev.type, ev.t, roleOf(ev.pid, ev.t));
+				return ev.__spot;
+			}
+
+			// ── DOM refs ──────────────────────────────────────────────────────────────
+			const stageEl = document.getElementById("stage");
+			const idleEl = document.getElementById("idle-overlay");
+			const subline = document.getElementById("subline");
+			const connEl = document.getElementById("connstatus");
+			const clockEl = document.getElementById("clock");
+			const quarterEl = document.getElementById("quarter");
+			const playEl = document.getElementById("play");
+			const scoreH = document.getElementById("score-home");
+			const scoreA = document.getElementById("score-away");
+			const abbrevH = document.getElementById("abbrev-home");
+			const abbrevA = document.getElementById("abbrev-away");
+			const teamStatsEl = document.getElementById("teamstats");
+			const speedEl = document.getElementById("speed");
+			const speedVal = document.getElementById("speed-val");
+
+			// Default playback speed — 0.65× feels right at our zoom level. Users can
+			// dial up to 6× when watching live and don't need to track every motion.
+			let speed = 0.65;
+			speedEl.value = "0.65";
+			speedVal.textContent = "0.65×";
+			speedEl.addEventListener("input", () => {
+				speed = parseFloat(speedEl.value);
+				speedVal.textContent = `${speed.toFixed(2).replace(/\.?0+$/, "")}×`;
+			});
+
+			const setConn = (state, text) => {
+				connEl.className = state;
+				connEl.textContent = text;
+			};
+
+			// ── Pixi app ──────────────────────────────────────────────────────────────
+			const app = new PIXI.Application();
+			await app.init({
+				background: DEFAULT_COLORS.bg,
+				antialias: true,
+				resizeTo: stageEl,
+				autoDensity: true,
+				resolution: Math.min(window.devicePixelRatio || 1, 2),
+			});
+			stageEl.appendChild(app.canvas);
+			app.canvas.style.touchAction = "pan-y";
+
+			const world = new PIXI.Container();
+			app.stage.addChild(world);
+
+			function layoutWorld() {
+				const fullW = COURT.length + APRON_FT * 2;
+				const fullH = COURT.width + APRON_FT * 2;
+				const sx = app.renderer.width / fullW;
+				const sy = app.renderer.height / fullH;
+				const s = Math.min(sx, sy);
+				world.scale.set(s, s);
+				world.x = (app.renderer.width - fullW * s) / 2 + APRON_FT * s;
+				world.y = (app.renderer.height - fullH * s) / 2 + APRON_FT * s;
+			}
+			app.renderer.on("resize", layoutWorld);
+			layoutWorld();
+
+			// ── Procedural court ──────────────────────────────────────────────────────
+			// Drawn via Pixi Graphics instead of a per-team JPEG so EVERY team gets a
+			// real court without sourcing 30 textures. Paint key tinted by home team
+			// primary color (from gameStart packet). The apron extends past the playing
+			// surface so inbounders can stand OOB and movement near the baseline reads
+			// correctly.
+			const COURT_LINE = 0xfaf2dd; // ivory court lines
+			const COURT_FLOOR = 0xc9a06a; // wood floor
+			const COURT_APRON = 0x6b4a2a; // darker apron
+			const COURT_BACKBOARD = 0x222222;
+			const COURT_RIM = 0xe65b1c;
+
+			let courtGfx = null;
+			let courtSprite = null; // textured court sprite (when manifest hits)
+			function drawCourt(homePaintColor, awayPaintColor) {
+				if (courtGfx) world.removeChild(courtGfx);
+				// If we previously had a textured sprite, drop it — a procedural-only
+				// redraw means we don't want the old sprite still on top of the apron.
+				if (courtSprite) {
+					world.removeChild(courtSprite);
+					courtSprite = null;
+				}
+				const g = new PIXI.Graphics();
+				const lw = 0.18; // line width in feet
+				// Apron (darker wood) — extends past the playing surface on all sides.
+				g.rect(-APRON_FT, -APRON_FT, 94 + APRON_FT * 2, 50 + APRON_FT * 2).fill(
+					COURT_APRON,
+				);
+				// Playing surface (light wood).
+				g.rect(0, 0, 94, 50).fill(COURT_FLOOR);
+
+				// Sidelines + baselines.
+				g.rect(0, 0, 94, lw).fill(COURT_LINE);
+				g.rect(0, 50 - lw, 94, lw).fill(COURT_LINE);
+				g.rect(0, 0, lw, 50).fill(COURT_LINE);
+				g.rect(94 - lw, 0, lw, 50).fill(COURT_LINE);
+
+				// Half-court line + center circles.
+				g.rect(47 - lw / 2, 0, lw, 50).fill(COURT_LINE);
+				g.circle(47, 25, 6).stroke({ color: COURT_LINE, width: lw });
+				g.circle(47, 25, 2).stroke({ color: COURT_LINE, width: lw });
+
+				// Lane (paint key) — left side, away team color (this is team 1's basket).
+				g.rect(0, 17, 19, 16).fill(awayPaintColor);
+				g.rect(0, 17, 19, lw).fill(COURT_LINE);
+				g.rect(0, 33 - lw, 19, lw).fill(COURT_LINE);
+				g.rect(19 - lw, 17, lw, 16).fill(COURT_LINE);
+				// FT semicircle (open toward baseline = filled, away from baseline = dashed/open arc).
+				g.arc(19, 25, 6, -Math.PI / 2, Math.PI / 2).stroke({
+					color: COURT_LINE,
+					width: lw,
+				});
+				// Restricted area (4 ft arc around rim).
+				g.arc(5.25, 25, 4, -Math.PI / 2, Math.PI / 2, false).stroke({
+					color: COURT_LINE,
+					width: lw,
+				});
+
+				// Lane (paint key) — right side, home team color (team 0 attacks here).
+				g.rect(75, 17, 19, 16).fill(homePaintColor);
+				g.rect(75, 17, 19, lw).fill(COURT_LINE);
+				g.rect(75, 33 - lw, 19, lw).fill(COURT_LINE);
+				g.rect(75, 17, lw, 16).fill(COURT_LINE);
+				g.arc(75, 25, 6, Math.PI / 2, (3 * Math.PI) / 2).stroke({
+					color: COURT_LINE,
+					width: lw,
+				});
+				g.arc(88.75, 25, 4, Math.PI / 2, (3 * Math.PI) / 2, false).stroke({
+					color: COURT_LINE,
+					width: lw,
+				});
+
+				// 3-pt arc — left side. Rim at (5.25, 25). Arc radius 23.75. Corner-3 lines
+				// run from baseline to x = 14, at y = 3 and y = 47. Compute arc-end angles
+				// where it meets those lines.
+				const arcR = 23.75;
+				const cornerY = 3; // distance from sideline
+				const cornerX = 14; // distance from baseline where corner straight line ends
+				// Left arc: rim center (5.25, 25). Endpoints at (cornerX, cornerY) and (cornerX, 50-cornerY).
+				const lTopA = Math.atan2(cornerY - 25, cornerX - 5.25);
+				const lBotA = Math.atan2(50 - cornerY - 25, cornerX - 5.25);
+				g.arc(5.25, 25, arcR, lTopA, lBotA).stroke({
+					color: COURT_LINE,
+					width: lw,
+				});
+				g.rect(0, cornerY - lw / 2, cornerX, lw).fill(COURT_LINE);
+				g.rect(0, 50 - cornerY - lw / 2, cornerX, lw).fill(COURT_LINE);
+
+				// Right arc: rim center (88.75, 25). Endpoints at (94-cornerX, cornerY) and (94-cornerX, 50-cornerY).
+				const rRimX = 88.75;
+				const rTopA = Math.atan2(cornerY - 25, 94 - cornerX - rRimX);
+				const rBotA = Math.atan2(50 - cornerY - 25, 94 - cornerX - rRimX);
+				// Go from top angle through Math.PI to bot angle (the back of the arc).
+				// Easier: stroke from rTopA going CCW around to rBotA via PI.
+				g.arc(rRimX, 25, arcR, rTopA, rBotA, true).stroke({
+					color: COURT_LINE,
+					width: lw,
+				});
+				g.rect(94 - cornerX, cornerY - lw / 2, cornerX, lw).fill(COURT_LINE);
+				g.rect(94 - cornerX, 50 - cornerY - lw / 2, cornerX, lw).fill(
+					COURT_LINE,
+				);
+
+				// Backboards + rims.
+				g.rect(4, 22, 0.18, 6).fill(COURT_BACKBOARD);
+				g.rect(89.82, 22, 0.18, 6).fill(COURT_BACKBOARD);
+				g.circle(5.25, 25, 0.75).stroke({ color: COURT_RIM, width: 0.2 });
+				g.circle(88.75, 25, 0.75).stroke({ color: COURT_RIM, width: 0.2 });
+
+				world.addChildAt(g, 0);
+				courtGfx = g;
+			}
+			// Initial draw with neutral wood-tone paints; gameStart will redraw with the
+			// real team colors.
+			drawCourt(0x8a6a3e, 0x8a6a3e);
+
+			// ── Court catalog ─────────────────────────────────────────────────────────
+			// Per-team court images live in /simcast/static/courts/. The manifest maps
+			// each NBA abbrev to a list of variants (modern + season-ranged historical).
+			// When a textured court is available for the home team we use it; otherwise
+			// we fall back to the procedural court rendered above.
+			let courtManifest = null;
+			async function loadCourtManifest() {
+				try {
+					const res = await fetch("/simcast/static/courts/manifest.json");
+					if (!res.ok) throw new Error("manifest not ok");
+					courtManifest = await res.json();
+				} catch {
+					courtManifest = {};
+				}
+			}
+			await loadCourtManifest();
+
+			// Region+name → standard abbrev fallback (custom leagues sometimes ship
+			// non-standard abbrevs like "BUL" or "Bulls"; map by city/name first).
+			const REGION_NAME_TO_ABBREV = {
+				"Atlanta/Hawks": "ATL",
+				"Boston/Celtics": "BOS",
+				"Brooklyn/Nets": "BKN",
+				"Charlotte/Hornets": "CHA",
+				"Chicago/Bulls": "CHI",
+				"Cleveland/Cavaliers": "CLE",
+				"Dallas/Mavericks": "DAL",
+				"Denver/Nuggets": "DEN",
+				"Detroit/Pistons": "DET",
+				"Golden State/Warriors": "GSW",
+				"Houston/Rockets": "HOU",
+				"Indiana/Pacers": "IND",
+				"Los Angeles/Clippers": "LAC",
+				"Los Angeles/Lakers": "LAL",
+				"Memphis/Grizzlies": "MEM",
+				"Miami/Heat": "MIA",
+				"Milwaukee/Bucks": "MIL",
+				"Minnesota/Timberwolves": "MIN",
+				"New Orleans/Pelicans": "NOP",
+				"New York/Knicks": "NYK",
+				"Oklahoma City/Thunder": "OKC",
+				"Orlando/Magic": "ORL",
+				"Philadelphia/76ers": "PHI",
+				"Phoenix/Suns": "PHX",
+				"Portland/Trail Blazers": "POR",
+				"Sacramento/Kings": "SAC",
+				"San Antonio/Spurs": "SAS",
+				"Toronto/Raptors": "TOR",
+				"Utah/Jazz": "UTA",
+				"Washington/Wizards": "WAS",
+			};
+
+			// Resolve a team's manifest key. Prefer the literal abbrev; fall back to
+			// region+name lookup (for custom leagues / non-standard abbrevs).
+			function resolveManifestKey(team) {
+				if (!team) return null;
+				if (team.abbrev && courtManifest?.[team.abbrev]) return team.abbrev;
+				if (team.region && team.name) {
+					const key = `${team.region}/${team.name}`;
+					const std = REGION_NAME_TO_ABBREV[key];
+					if (std && courtManifest?.[std]) return std;
+				}
+				return team.abbrev ?? null;
+			}
+
+			function pickCourtVariant(abbrev, season) {
+				if (!courtManifest || !abbrev) return null;
+				const variants = courtManifest[abbrev];
+				if (!Array.isArray(variants)) return null;
+				let picked = null;
+				if (typeof season === "number") {
+					for (const v of variants) {
+						if (
+							v.seasonRange &&
+							season >= v.seasonRange[0] &&
+							season <= v.seasonRange[1]
+						) {
+							picked = v;
+							break;
+						}
+					}
+				}
+				if (!picked) picked = variants.find((v) => !v.seasonRange) ?? null;
+				if (!picked) return null;
+				// Manifest schema: `images: []` (array, post-2026-05-16) OR legacy `image: ""`.
+				// Pick one at random per game so dupes within an era cycle visually.
+				const pool = Array.isArray(picked.images)
+					? picked.images
+					: picked.image
+						? [picked.image]
+						: [];
+				if (pool.length === 0) return null;
+				const image = pool[Math.floor(Math.random() * pool.length)];
+				return { ...picked, image };
+			}
+
+			// Load a standardized court image. Every image in courts/std/ has been
+			// re-cropped + resized (by scripts/standardize-courts.py) so it maps 1:1 onto
+			// the simcast world rect (-APRON_FT,-APRON_FT)..(length+APRON_FT, width+APRON_FT):
+			// the playing surface is centered with the baskets exactly on the rims. So the
+			// sprite needs no per-image calibration — one fixed transform fits every image.
+			// Returns true on success; false (file missing/bad) → procedural fallback.
+			async function drawCourtFromImage(variant, homePaint, awayPaint) {
+				try {
+					const url = `/simcast/static/courts/std/${variant.image}`;
+					const tex = await PIXI.Assets.load(url);
+					if (!tex || !tex.source) return false;
+					tex.source.scaleMode = "linear";
+					// Procedural court underneath — covers any letterbox seam and keeps the
+					// rim/key geometry available for debugging. (drawCourt → courtGfx idx 0.)
+					drawCourt(homePaint, awayPaint);
+					if (courtSprite) world.removeChild(courtSprite);
+					const sprite = new PIXI.Sprite(tex);
+					// The standardized image IS the world rect including the apron margin.
+					sprite.x = -APRON_FT;
+					sprite.y = -APRON_FT;
+					sprite.width = COURT.length + APRON_FT * 2;
+					sprite.height = COURT.width + APRON_FT * 2;
+					// Sit above the procedural Graphics (index 0), below the player layer.
+					world.addChildAt(sprite, 1);
+					courtSprite = sprite;
+					return true;
+				} catch {
+					return false;
+				}
+			}
+
+			// Resolve the home team's court image and swap it in over the procedural
+			// court. Async — the procedural court shows instantly until the texture
+			// resolves, then the standardized arena image replaces it.
+			async function applyTexturedCourt(packet) {
+				try {
+					const key = resolveManifestKey(packet.teams[0]);
+					const variant = pickCourtVariant(key, packet.season);
+					if (variant) {
+						await drawCourtFromImage(
+							variant,
+							teamColors[0].primary,
+							teamColors[1].primary,
+						);
+					}
+				} catch {
+					/* keep the procedural court already drawn */
+				}
+			}
+
+			const playerLayer = new PIXI.Container();
+			world.addChild(playerLayer);
+
+			// ── Ball ──────────────────────────────────────────────────────────────────
+			const ballTex = await PIXI.Assets.load(
+				"/simcast-spike/static/sprites/ball.png",
+			);
+			ballTex.source.scaleMode = "linear";
+			const ballGfx = new PIXI.Sprite(ballTex);
+			ballGfx.anchor.set(0.5, 0.5);
+			ballGfx.width = 2.0;
+			ballGfx.height = 2.0;
+			const ballShadow = new PIXI.Graphics();
+			ballShadow
+				.ellipse(0, 0, 0.7, 0.35)
+				.fill({ color: 0x000000, alpha: 0.35 });
+			world.addChild(ballShadow);
+			world.addChild(ballGfx);
+
+			// ── State ─────────────────────────────────────────────────────────────────
+			// players: pid -> { gfx, x, y, t, info, r, onCourt, slot }
+			let players = {};
+			let teams = [null, null]; // gameStart payload
+			let onCourt = [[], []]; // pids currently on court per team
+			let scores = [0, 0];
+			let teamStats = [
+				{
+					fgm: 0,
+					fga: 0,
+					tpm: 0,
+					tpa: 0,
+					ftm: 0,
+					fta: 0,
+					reb: 0,
+					ast: 0,
+					stl: 0,
+					blk: 0,
+					tov: 0,
+				},
+				{
+					fgm: 0,
+					fga: 0,
+					tpm: 0,
+					tpa: 0,
+					ftm: 0,
+					fta: 0,
+					reb: 0,
+					ast: 0,
+					stl: 0,
+					blk: 0,
+					tov: 0,
+				},
+			];
+			let currentPeriod = 1;
+			let currentClock = null;
+			let lastEventClock = null;
+			let gameOver = false;
+			let possessionTeam = 0; // which team currently has the ball
+			let ball = { x: 47, y: 25, z: 0, carrier: null };
+			const driftSeeds = {};
+
+			// Player factory
+			function makePlayer(pInfo, t, slot) {
+				const color = teamColors[t].primary;
+				const ringC = teamColors[t].secondary;
+				// Use white text unless the dot color is too light, in which case use the
+				// secondary color for contrast.
+				const posTextC = 0xffffff;
+				const r = dotRadius(POS_HGT[pInfo.pos] ?? 78);
+
+				const cont = new PIXI.Container();
+				const dot = new PIXI.Graphics();
+				dot.circle(0, 0, r).fill(color).stroke({ color: ringC, width: 0.32 });
+				cont.addChild(dot);
+
+				const posLabel = new PIXI.Text({
+					text: pInfo.pos ?? "",
+					style: {
+						fill: posTextC,
+						fontSize: 32,
+						fontFamily: "system-ui",
+						fontWeight: "800",
+						letterSpacing: -0.5,
+					},
+				});
+				posLabel.anchor.set(0.5, 0.5);
+				posLabel.scale.set(0.038);
+				cont.addChild(posLabel);
+
+				// Show last name only (3-letter code if very long).
+				const last = (pInfo.name || "").split(" ").slice(-1)[0] || "";
+				const nameLabel = new PIXI.Text({
+					text: last.length > 9 ? last.slice(0, 8) + "…" : last,
+					style: {
+						fill: 0xffffff,
+						fontSize: 30,
+						fontFamily: "system-ui",
+						fontWeight: "700",
+						stroke: { color: 0x000000, width: 5, alpha: 0.85 },
+					},
+				});
+				nameLabel.anchor.set(0.5, 0);
+				nameLabel.scale.set(0.055);
+				nameLabel.position.set(0, r + 0.25);
+				cont.addChild(nameLabel);
+
+				playerLayer.addChild(cont);
+				const role = POS_TO_ROLE[pInfo.pos ?? ""] ?? "SF";
+				const [x, y] = offensiveRoleSpot(t, role, 0);
+				cont.position.set(x, y);
+				driftSeeds[pInfo.pid] = Math.random() * Math.PI * 2;
+				return {
+					gfx: cont,
+					x,
+					y,
+					t,
+					info: pInfo,
+					r,
+					onCourt: true,
+					slot,
+					nameLabel,
+					nameAbove: false,
+				};
+			}
+
+			async function initFromGameStart(packet) {
+				// Tear down any previous players.
+				for (const pid in players) playerLayer.removeChild(players[pid].gfx);
+				players = {};
+				teams = packet.teams;
+				// Resolve per-team colors. BBGM ships colors as ["#rrggbb", "#rrggbb", "#rrggbb"]
+				// (jersey, secondary, accent). Use [0] as primary, [1] as ring.
+				for (const t of [0, 1]) {
+					const cols = packet.teams[t].colors;
+					if (Array.isArray(cols) && cols.length >= 2) {
+						const primary = parseColor(cols[0]);
+						const secondary = parseColor(cols[1]);
+						if (primary !== null && secondary !== null) {
+							teamColors[t] = { primary, secondary };
+						}
+					}
+				}
+				// Draw the procedural court immediately (so there is always a floor), then
+				// swap in the home team's standardized arena image once it loads. The
+				// standardized images map 1:1 to world coords, so the painted rim lines up
+				// with the logical rim the ball targets.
+				drawCourt(teamColors[0].primary, teamColors[1].primary);
+				applyTexturedCourt(packet);
+				onCourt = [[], []];
+				scores = [0, 0];
+				scoreH.textContent = "0";
+				scoreA.textContent = "0";
+				teamStats = teamStats.map(() => ({
+					fgm: 0,
+					fga: 0,
+					tpm: 0,
+					tpa: 0,
+					ftm: 0,
+					fta: 0,
+					reb: 0,
+					ast: 0,
+					stl: 0,
+					blk: 0,
+					tov: 0,
+				}));
+				abbrevH.textContent = packet.teams[0].abbrev || "HOME";
+				abbrevA.textContent = packet.teams[1].abbrev || "AWAY";
+				subline.textContent = `${packet.teams[1].region} ${packet.teams[1].name} @ ${packet.teams[0].region} ${packet.teams[0].name} · ${packet.season ?? ""}`;
+				// Only render the 5 starters; subs lazy-instantiate the rest as they occur.
+				// boxScore players are ordered with starters first.
+				const STARTERS = 5;
+				for (const t of [0, 1]) {
+					packet.teams[t].players.forEach((p, idx) => {
+						if (idx < STARTERS) {
+							players[p.pid] = makePlayer(p, t, idx);
+							onCourt[t].push(p.pid);
+						}
+						// Non-starters: registered in teams[t].players (consulted by sub handler)
+						// but no Pixi node until they're subbed in.
+					});
+				}
+				// Center ball at half court for tip-off.
+				ball = { x: 47, y: 25, z: 0, carrier: null };
+				currentPeriod = 1;
+				currentClock = null;
+				gameOver = false;
+				possessionTeam = 0;
+				quarterEl.textContent = "Q1";
+				playEl.textContent = "Tip-off";
+				idleEl.classList.add("hidden");
+				renderStats();
+
+				// Load the full pre-simulated game into the queue and start the scheduler.
+				eventQueue.length = 0;
+				if (drainTimer !== null) {
+					clearTimeout(drainTimer);
+					drainTimer = null;
+				}
+				clearPendingMotion();
+				nextEarliestMs = performance.now();
+				const incoming = Array.isArray(packet.events) ? packet.events : [];
+				for (const ev of incoming) eventQueue.push(ev);
+
+				// Tipoff: both centers walk to center court, ball pops up, one team wins,
+				// ball tips out to that team's PG. If BBGM's first event is jumpBall we
+				// let it drive (its handler runs the same tipoff animation); otherwise
+				// we play a synthetic one to open the game with motion.
+				if (!incoming.slice(0, 3).some((e) => e?.type === "jumpBall")) {
+					runTipoff();
+					nextEarliestMs = performance.now() + 2400;
+				}
+				scheduleDrain();
+			}
+
+			// Walk both Cs to center court, pop the ball, tip to winner's PG. Suspends
+			// the event drain for ~2.4s via nextEarliestMs so the first real event lines
+			// up after the tipoff settles.
+			//
+			// Explicit role-based slots (user spec 2026-05-16):
+			//   C  in the jump circle
+			//   PG at top of own 3pt arc (23.75 ft from own rim)
+			//   PF between C and PG (mid-distance, slightly off half-line)
+			//   SF / SG wings, ~7 ft off the half-court line into their own half
+			function runTipoff() {
+				// Protect tipoff positions from setupNextInterval's immediate replan:
+				// exclude all 10 on-court players for the duration of the tipoff so the
+				// next event's planMotion doesn't yank them to half-court spots. Released
+				// by the final setTimeout below.
+				for (const pid of onCourt[0]) reformExclude.add(pid);
+				for (const pid of onCourt[1]) reformExclude.add(pid);
+				// Suspend event drain for the tipoff window so the FIRST real event after
+				// the jump doesn't fire mid-animation. Idempotent when called nested.
+				nextEarliestMs = Math.max(nextEarliestMs, performance.now() + 2400);
+
+				// Find each team's center (or tallest starter as fallback).
+				const findCenter = (t) => {
+					const cPid = onCourt[t].find((pid) => roleOf(pid, t) === "C");
+					if (cPid !== undefined) return cPid;
+					return onCourt[t][onCourt[t].length - 1] ?? onCourt[t][0];
+				};
+				const c0 = findCenter(0),
+					c1 = findCenter(1);
+				// Per-role slot table. Team 0 attacks right rim (88.75); team 1 attacks left (5.25).
+				// Centers face off across the jump circle ~3.4 ft apart (real jump-ball
+				// spacing — not stacked on top of each other).
+				const tipoffSpots = {
+					0: {
+						C: [48.7, 25],
+						PG: [70.25, 25],
+						PF: [58, 22],
+						SF: [53, 17],
+						SG: [53, 33],
+					},
+					1: {
+						C: [45.3, 25],
+						PG: [23.75, 25],
+						PF: [36, 28],
+						SF: [41, 33],
+						SG: [41, 17],
+					},
+				};
+				// Teleport everyone to their tipoff slot — the velocity-clamped moveTo
+				// can't traverse 40+ ft of court in the tipoff window. Direct position
+				// assignment guarantees Cs are in the circle when the ball pops up.
+				const placePlayer = (pid, x, y) => {
+					const pl = players[pid];
+					if (!pl) return;
+					// Cancel any in-flight tween for this player.
+					for (let i = tweens.length - 1; i >= 0; i--) {
+						if (tweens[i].pid === pid) tweens.splice(i, 1);
+					}
+					pl.x = x;
+					pl.y = y;
+					pl.gfx.position.set(x, y);
+				};
+				for (const t of [0, 1]) {
+					for (const pid of onCourt[t]) {
+						if (pid === c0 || pid === c1) continue;
+						const role = roleOf(pid, t);
+						const spot = tipoffSpots[t][role] ?? tipoffSpots[t].SF;
+						placePlayer(
+							pid,
+							spot[0] + rand(-0.5, 0.5),
+							spot[1] + rand(-0.5, 0.5),
+						);
+					}
+				}
+				if (c0 !== undefined)
+					placePlayer(c0, tipoffSpots[0].C[0], tipoffSpots[0].C[1]);
+				if (c1 !== undefined)
+					placePlayer(c1, tipoffSpots[1].C[0], tipoffSpots[1].C[1]);
+
+				// Ball sits exactly at the midpoint between the two centers — the ref's toss
+				// goes straight up between them.
+				const jx =
+					c0 !== undefined && c1 !== undefined
+						? (players[c0].x + players[c1].x) / 2
+						: 47;
+				const jy =
+					c0 !== undefined && c1 !== undefined
+						? (players[c0].y + players[c1].y) / 2
+						: 25;
+				ball = { x: jx, y: jy, z: 0, carrier: null };
+
+				// After 1.1s — ball pops up straight from the jump-circle midpoint.
+				pendingMotion.push(
+					setTimeout(() => {
+						ballArcs.push({
+							x0: jx,
+							y0: jy,
+							x1: jx,
+							y1: jy,
+							peak: 14,
+							t0: now,
+							dur: 0.7,
+						});
+					}, 1100),
+				);
+
+				// After 1.85s — one team "wins" the tip. The winner is the team that takes
+				// the first shot of the game (per the event queue), so the tip-out feeds the
+				// side that actually has the opening possession — no chaotic double-traverse
+				// where everyone reforms one way then immediately reverses.
+				let winT = null;
+				for (const e of eventQueue) {
+					if (e && FGA_TYPES.has(e.type)) {
+						winT = e.t;
+						break;
+					}
+				}
+				if (winT !== 0 && winT !== 1) winT = Math.random() < 0.5 ? 0 : 1;
+				pendingMotion.push(
+					setTimeout(() => {
+						possessionTeam = winT;
+						rollPlay();
+						// Tip ball toward winning team's PG, parked at ~30 ft from their baseline.
+						const pgPid =
+							onCourt[winT].find((pid) => roleOf(pid, winT) === "PG") ??
+							onCourt[winT][0];
+						if (pgPid !== undefined && players[pgPid]) {
+							const pg = players[pgPid];
+							// PG receives the ball ~30 ft from their attacking baseline.
+							const attackingBaseline = winT === 0 ? 94 : 0;
+							const dir = winT === 0 ? -1 : 1;
+							const targetX = attackingBaseline + dir * 30;
+							moveTo(pgPid, targetX, pg.y, 0.5, "sprint");
+							// Ball arc lands on PG ~250ms later.
+							pendingMotion.push(
+								setTimeout(() => {
+									ballArcs.push({
+										x0: jx,
+										y0: jy,
+										x1: targetX,
+										y1: pg.y,
+										peak: 8,
+										t0: now,
+										dur: 0.5,
+									});
+									pendingMotion.push(
+										setTimeout(() => {
+											if (players[pgPid]) ball.carrier = pgPid;
+										}, 500),
+									);
+								}, 0),
+							);
+						}
+					}, 1850),
+				);
+
+				// Release the protective exclusion at the end of the tipoff window so the
+				// next setupNextInterval can finally plan the first real possession.
+				pendingMotion.push(
+					setTimeout(() => {
+						reformExclude.clear();
+						// The drain already planned the first post-tipoff event while all 10
+						// players were still in reformExclude — so every one of its moveTo calls
+						// was skipped and the floor is frozen. Replan now that the exclusion is
+						// released, otherwise the opening possession has zero motion.
+						replanCurrentGap();
+					}, 2400),
+				);
+			}
+
+			// ── Animation primitives ──────────────────────────────────────────────────
+			const tweens = []; // {pid, x0, y0, x1, y1, t0, dur}
+			const ballArcs = []; // {x0, y0, x1, y1, peak, t0, dur, onLand?}
+			let now = 0; // monotonic seconds (real time)
+
+			function easeInOutQuad(t) {
+				return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+			}
+
+			function moveTo(pid, x, y, dur = 0.5, urgency = "jog") {
+				const pl = players[pid];
+				if (!pl) return;
+				// Velocity clamp: a player can only cover maxFps * dur feet in this tween.
+				// If the requested target is further, ray-clamp along the player→target
+				// direction — the next reform will continue the journey from there.
+				const cap = MAX_FPS_BY_URGENCY[urgency] ?? MAX_FPS_BY_URGENCY.jog;
+				const effDur = Math.max(dur, MIN_DUR);
+				const dx = x - pl.x,
+					dy = y - pl.y;
+				const dist = Math.hypot(dx, dy);
+				const maxDist = cap * effDur;
+				let tx = x,
+					ty = y;
+				if (dist > maxDist) {
+					const k = maxDist / dist;
+					tx = pl.x + dx * k;
+					ty = pl.y + dy * k;
+				}
+				// Cancel any in-flight tween for this player.
+				for (let i = tweens.length - 1; i >= 0; i--) {
+					if (tweens[i].pid === pid) tweens.splice(i, 1);
+				}
+				tweens.push({
+					pid,
+					x0: pl.x,
+					y0: pl.y,
+					x1: tx,
+					y1: ty,
+					t0: now,
+					dur: effDur,
+				});
+			}
+
+			function ballArcTo(x, y, dur = 0.6, peak = 4) {
+				const start =
+					ball.carrier && players[ball.carrier]
+						? { x: players[ball.carrier].x, y: players[ball.carrier].y }
+						: { x: ball.x, y: ball.y };
+				ballArcs.push({
+					x0: start.x,
+					y0: start.y,
+					x1: x,
+					y1: y,
+					peak,
+					t0: now,
+					dur,
+				});
+				ball.carrier = null;
+			}
+
+			// Each possession picks a play type AND a per-role variant index. Re-rolled
+			// on possession changes (drb/stl/tov/made-FG), not on every shot — so the
+			// offense looks consistent throughout a single trip down the floor.
+			let currentPlay = "set";
+			let currentSet = { PG: 0, SG: 0, SF: 0, PF: 0, C: 0 };
+			function rollPlay() {
+				currentPlay = PLAY_TYPES[Math.floor(Math.random() * PLAY_TYPES.length)];
+				for (const role of Object.keys(currentSet)) {
+					const spots = PLAY_PLAYBOOK[currentPlay]?.[role] ?? [[0, 25]];
+					currentSet[role] = Math.floor(Math.random() * spots.length);
+				}
+			}
+
+			// Cached target positions for offensive players for the current set.
+			// Populated in reformOffense; consumed by reformDefense so defenders mark
+			// where their man is GOING, not where they currently are (offense and defense
+			// reform tweens fire in the same frame).
+			let offensiveTargets = {}; // pid → [x, y]
+
+			// Pending setTimeout ids for off-ball motion (cuts, screener rolls). Cleared
+			// on each game start so stale motions from the previous game don't fire.
+			let pendingMotion = [];
+
+			// Freelance ball-movement timers, tracked separately so a fired shot can
+			// cancel any still-pending passes. `swingToken` invalidates callbacks that
+			// were already scheduled when a new shot/possession supersedes them.
+			let swingTimers = [];
+			let swingToken = 0;
+			function clearSwing() {
+				for (const id of swingTimers) clearTimeout(id);
+				swingTimers = [];
+				swingToken++;
+			}
+
+			function clearPendingMotion() {
+				for (const id of pendingMotion) clearTimeout(id);
+				pendingMotion = [];
+				clearSwing();
+			}
+
+			// Players that the next reform should leave alone (e.g. inbounder mid-animation).
+			// Cleared at the start of each reform pass.
+			const reformExclude = new Set();
+
+			// Animate an inbound: inbounder for the receiving team stands on the apron
+			// at the OOB spot, pass arcs to a receiver near halfcourt, receiver brings
+			// the ball up. The next event takes over once this completes.
+			//
+			//   inboundT  — team that gets the ball
+			//   fromX/Y   — court coords where the ball went out of play (or 0 for
+			//               make-inbounds: the rim the scoring team attacked)
+			//   reason    — "make" | "tov" | "oob"; influences baseline-vs-sideline choice
+			function scheduleInbound({ inboundT, fromX, fromY, reason = "make" }) {
+				if (inboundT === undefined || inboundT === null) return;
+				// Pick the inbounder — usually the PG (typical NBA inbounder role).
+				const inbounder =
+					onCourt[inboundT].find((pid) => roleOf(pid, inboundT) === "PG") ??
+					onCourt[inboundT][0];
+				if (inbounder === undefined) return;
+				// Pick a receiver — SG or SF, preferring the one furthest from the inbounder.
+				const candidates = onCourt[inboundT].filter(
+					(pid) =>
+						pid !== inbounder && ["SG", "SF"].includes(roleOf(pid, inboundT)),
+				);
+				const receiver = candidates[0] ?? onCourt[inboundT][1];
+
+				// Decide baseline vs. sideline. Makes are always baseline (under the rim
+				// the scoring team attacked). For tov/oob: if the ball went near a baseline
+				// AND in the lane, inbound there; otherwise nearest sideline.
+				let baselineX, baselineY, receiverX, receiverY;
+				if (reason === "make") {
+					// fromX is the rim the scoring team attacked; inbound team takes it
+					// out from that baseline.
+					const dir = fromX > 47 ? 1 : -1; // direction into the apron
+					const baseX = fromX > 47 ? 94 : 0;
+					baselineX = baseX + dir * 3; // 3 ft into the apron
+					baselineY = 25 + rand(-3, 3);
+					receiverX = dir > 0 ? 78 : 16; // outlet ~16 ft into the floor
+					receiverY = 18;
+				} else {
+					// Turnover or true OOB. Use fromX/fromY directly.
+					const nearBaselineLeft = fromX < 5;
+					const nearBaselineRight = fromX > 89;
+					const inLane = fromY > 17 && fromY < 33;
+					if ((nearBaselineLeft || nearBaselineRight) && inLane) {
+						// Baseline inbound.
+						const dir = nearBaselineRight ? 1 : -1;
+						baselineX = (nearBaselineRight ? 94 : 0) + dir * 3;
+						baselineY = clamp(fromY + rand(-4, 4), 2, 48);
+						receiverX = dir > 0 ? 78 : 16;
+						receiverY = clamp(fromY + rand(-6, 6), 6, 44);
+					} else {
+						// Sideline inbound — inbounder stands 3 ft past the nearest sideline.
+						const sideDir = fromY < 25 ? -1 : 1; // -1 = top sideline, +1 = bottom
+						baselineX = clamp(fromX, 4, 90);
+						baselineY = (sideDir < 0 ? 0 : 50) + sideDir * 3;
+						// Receiver in the offensive half on the same lateral side.
+						const offHalfDir = inboundT === 0 ? 1 : -1; // team 0 attacks right
+						receiverX = offHalfDir > 0 ? 64 : 30;
+						receiverY = clamp(fromY + (sideDir < 0 ? 8 : -8), 10, 40);
+					}
+				}
+
+				reformExclude.add(inbounder);
+				if (receiver !== undefined) reformExclude.add(receiver);
+
+				// Suspend the event drain for the inbound duration (~2.4s) so non-inbounder
+				// players have time to transition across the floor to their new half-court
+				// role spots — at sprint cap (19 ft/s) that's ~42 ft of reach, enough to
+				// cross half court before the first post-inbound event fires.
+				const INBOUND_DURATION_MS = 2400;
+				nextEarliestMs = Math.max(
+					nextEarliestMs,
+					performance.now() + INBOUND_DURATION_MS,
+				);
+
+				// Pre-stage the 3 non-inbounder team members at NEW offensive role spots,
+				// and all 5 defenders at their defensive matchup spots. possessionTeam may
+				// not have flipped yet — we know inboundT is the new offense.
+				rollPlay();
+				const defT = inboundT === 0 ? 1 : 0;
+				const defRim = defendedRimX(defT);
+				for (const pid of onCourt[inboundT]) {
+					if (pid === inbounder || pid === receiver) continue;
+					const role = roleOf(pid, inboundT);
+					const [tx, ty] = offensiveRoleSpot(
+						inboundT,
+						role,
+						currentSet[role] ?? 0,
+					);
+					moveTo(pid, tx + rand(-2, 2), ty + rand(-2, 2), 2.2, "sprint");
+				}
+				for (const pid of onCourt[defT]) {
+					const role = roleOf(pid, defT);
+					const [ox, oy] = offensiveRoleSpot(
+						inboundT,
+						role,
+						currentSet[role] ?? 0,
+					);
+					// Defender on the man→rim line, 6 ft toward the rim from man.
+					const dx = defRim - ox,
+						dy = 25 - oy;
+					const dl = Math.hypot(dx, dy) || 1;
+					const tx = ox + (dx / dl) * 6;
+					const ty = oy + (dy / dl) * 6;
+					moveTo(
+						pid,
+						clamp(tx + rand(-1, 1), 1, 93),
+						clamp(ty + rand(-1, 1), 1, 49),
+						2.2,
+						"sprint",
+					);
+				}
+
+				// t = 0: inbounder appears already out of bounds at the inbound spot. A real
+				// inbounder is handed the ball standing OOB — never throwing from inside the
+				// line. Teleport rather than moveTo: a velocity-clamped walk from their last
+				// position may not reach the apron before the pass fires.
+				pendingMotion.push(
+					setTimeout(() => {
+						for (let i = tweens.length - 1; i >= 0; i--) {
+							if (tweens[i].pid === inbounder) tweens.splice(i, 1);
+						}
+						const pl = players[inbounder];
+						if (pl) {
+							pl.x = baselineX;
+							pl.y = baselineY;
+							pl.gfx.position.set(baselineX, baselineY);
+						}
+						ball.carrier = inbounder;
+					}, 50),
+				);
+
+				// t = 0.4: receiver moves to outlet spot.
+				if (receiver !== undefined) {
+					pendingMotion.push(
+						setTimeout(() => {
+							moveTo(receiver, receiverX, receiverY, 0.8, "sprint");
+						}, 400),
+					);
+				}
+
+				// t = 1.4: pass — ball arcs to receiver; then receiver becomes carrier and
+				// dribbles up toward the offensive half. The next event takes over after.
+				pendingMotion.push(
+					setTimeout(() => {
+						if (receiver !== undefined && players[receiver]) {
+							const r = players[receiver];
+							ballArcTo(r.x, r.y, 0.5, 2);
+						}
+					}, 1400),
+				);
+				pendingMotion.push(
+					setTimeout(() => {
+						if (receiver !== undefined) ball.carrier = receiver;
+						// Release inbound exclusion BEFORE the replan so receiver/inbounder get
+						// included in the new movers list.
+						reformExclude.clear();
+						// Replan toward the next event with whatever time is left in the gap, and
+						// let the ball swing through the offense on the way to the shot — without
+						// this the receiver parks at "bring up" and heaves the next shot.
+						replanCurrentGap();
+					}, 2000),
+				);
+			}
+
+			// Decide whether a make event should trigger an inbound. FGs always; FTs only
+			// when it's the LAST FT of the trip (next event isn't another FT for the same team).
+			function shouldInboundAfter(ev) {
+				// Made FG (any 2/3pt make) — match fg* and tp* but not fga*.
+				if (
+					typeof ev.type === "string" &&
+					/^(fg|tp)[A-Z]?/.test(ev.type) &&
+					!ev.type.startsWith("fga")
+				) {
+					return true;
+				}
+				if (ev.type === "ft") {
+					const next = eventQueue[0];
+					if (!next) return true;
+					if ((next.type === "ft" || next.type === "missFt") && next.t === ev.t)
+						return false;
+					return true;
+				}
+				return false;
+			}
+
+			// Cut/screen layer deleted — variety now comes from planMotion's per-event
+			// targets (assister staging, paint pre-reach for at-rim shots, role-spot
+			// jitter per possession). Separate cut scheduling fought with planner targets.
+
+			// reformOffense / reformDefense were superseded by planMotion + buildRoleTargets.
+			// Their role/spot logic now lives in buildRoleTargets which is called by
+			// planMotion before any moveTo fires — letting the planner override specific
+			// players (assister, paint-pre-staging shooter) before tweens are queued.
+
+			// ── Lookahead positioning ─────────────────────────────────────────────────
+			const FGA_TYPES = new Set([
+				"fgaAtRim",
+				"fgaLowPost",
+				"fgaMidRange",
+				"fgaTp",
+				"fgaTpFake",
+				"fgaTipIn",
+				"fgaPutBack",
+			]);
+
+			// targetForNextEvent removed — its responsibilities are now in planMotion's
+			// per-event switch (sees both `next` and `next2` for richer staging).
+
+			// ── Motion planner (Phase 3.5 velocity-budgeted) ──────────────────────────
+			// Builds per-role base targets without firing tweens. Mirrors the role/spot
+			// logic from reformOffense+reformDefense so the planner can override specific
+			// players' targets before any tween is queued.
+			// Match each defender to the offensive player they should guard, by ROLE.
+			// Falls back to slot index when role distributions don't line up exactly
+			// (e.g. two offensive PGs after a sub creates a positional mismatch).
+			const ROLE_PRIORITY = { PG: 0, SG: 1, SF: 2, PF: 3, C: 4 };
+			function buildMatchups(offT, defT) {
+				// Map: offensive pid → defensive pid
+				const offByRole = {};
+				for (const pid of onCourt[offT]) {
+					const r = roleOf(pid, offT);
+					(offByRole[r] ??= []).push(pid);
+				}
+				const matchups = {};
+				const usedDef = new Set();
+				for (const dpid of onCourt[defT]) {
+					const r = roleOf(dpid, defT);
+					const candidates = offByRole[r];
+					if (candidates && candidates.length > 0) {
+						// Take the first unmatched offensive player of this role.
+						const opid = candidates.shift();
+						matchups[opid] = dpid;
+						usedDef.add(dpid);
+					}
+				}
+				// Any unmatched defender — assign to any unmatched offensive player in
+				// role-priority order so we still have full coverage after sub mismatches.
+				const unmatchedOff = onCourt[offT].filter(
+					(opid) => !(opid in matchups),
+				);
+				const unmatchedDef = onCourt[defT].filter((dpid) => !usedDef.has(dpid));
+				unmatchedOff.sort(
+					(a, b) =>
+						(ROLE_PRIORITY[roleOf(a, offT)] ?? 5) -
+						(ROLE_PRIORITY[roleOf(b, offT)] ?? 5),
+				);
+				unmatchedDef.sort(
+					(a, b) =>
+						(ROLE_PRIORITY[roleOf(a, defT)] ?? 5) -
+						(ROLE_PRIORITY[roleOf(b, defT)] ?? 5),
+				);
+				for (
+					let i = 0;
+					i < Math.min(unmatchedOff.length, unmatchedDef.length);
+					i++
+				) {
+					matchups[unmatchedOff[i]] = unmatchedDef[i];
+				}
+				return matchups;
+			}
+
+			// Push two points apart until they're at least `minDist` ft from each other.
+			// Used to enforce realistic NBA spacing — no two offensive players within
+			// arm's reach.
+			function enforceMinSpacing(targets, pids, minDist, skipPairs) {
+				// Few iterations of pairwise push — converges quickly for 5 players.
+				for (let iter = 0; iter < 4; iter++) {
+					let moved = false;
+					for (let i = 0; i < pids.length; i++) {
+						for (let j = i + 1; j < pids.length; j++) {
+							// A guarded pair (an offensive player and the defender assigned to
+							// him) is SUPPOSED to be close — pushing it apart breaks the matchup.
+							if (skipPairs) {
+								const lo = Math.min(pids[i], pids[j]),
+									hi = Math.max(pids[i], pids[j]);
+								if (skipPairs.has(lo + "|" + hi)) continue;
+							}
+							const a = targets[pids[i]],
+								b = targets[pids[j]];
+							if (!a || !b) continue;
+							const dx = b.x - a.x,
+								dy = b.y - a.y;
+							const d = Math.hypot(dx, dy);
+							if (d < minDist && d > 0.01) {
+								const push = (minDist - d) / 2 + 0.05;
+								const ux = dx / d,
+									uy = dy / d;
+								a.x -= ux * push;
+								a.y -= uy * push;
+								b.x += ux * push;
+								b.y += uy * push;
+								moved = true;
+							}
+						}
+					}
+					if (!moved) break;
+				}
+			}
+
+			function buildRoleTargets(offT, defT, mode) {
+				const targets = {}; // pid → { x, y, urgency }
+				offensiveTargets = {};
+
+				// Offense — place each player at their role spot for the current play.
+				for (const pid of onCourt[offT]) {
+					const role = roleOf(pid, offT);
+					const [x, y] =
+						mode === "ft"
+							? ftRoleSpot(offT, role, true)
+							: offensiveRoleSpot(offT, role, currentSet[role] ?? 0);
+					const jx = x + rand(-2.5, 2.5);
+					const jy = y + rand(-2.5, 2.5);
+					offensiveTargets[pid] = [x, y];
+					// Sprint urgency only raises the reachability cap — actual on-screen speed
+					// is still distance/gap — so far-side players reform fully instead of
+					// stalling mid-court and leaving the offense bunched.
+					targets[pid] = { x: jx, y: jy, urgency: "sprint" };
+				}
+
+				// Tighter offense spacing (NBA stand-around is 12–15 ft).
+				if (mode !== "ft") {
+					enforceMinSpacing(targets, onCourt[offT], 12);
+					for (const pid of onCourt[offT]) {
+						if (targets[pid])
+							offensiveTargets[pid] = [targets[pid].x, targets[pid].y];
+					}
+				}
+
+				// Defense — unit-vector man→rim with helpside sag.
+				const myRim = defendedRimX(defT);
+				const myRimY = 25;
+				let matchups = null;
+				if (mode === "ft") {
+					for (const pid of onCourt[defT]) {
+						const role = roleOf(pid, defT);
+						const [x, y] = ftRoleSpot(offT, role, false);
+						targets[pid] = {
+							x: x + rand(-0.6, 0.6),
+							y: y + rand(-0.6, 0.6),
+							urgency: "walk",
+						};
+					}
+				} else {
+					matchups = buildMatchups(offT, defT);
+					// Identify ball-carrier position to detect strong/weak side.
+					let ballX = null,
+						ballY = null;
+					const carrierPid = ball.carrier;
+					if (carrierPid !== null && offensiveTargets[carrierPid]) {
+						[ballX, ballY] = offensiveTargets[carrierPid];
+					}
+					for (const opid of Object.keys(matchups)) {
+						const dpid = matchups[opid];
+						const xy = offensiveTargets[opid];
+						if (!xy) continue;
+						const [manX, manY] = xy;
+						const isOnBall = Number(opid) === carrierPid;
+						const ballDist =
+							ballX !== null ? Math.hypot(manX - ballX, manY - ballY) : 0;
+						const isWeakside = Math.abs(manY - 25) > 16 && ballDist > 30;
+						// Place defender on the man→rim line, helping toward the rim.
+						const dxRim = myRim - manX,
+							dyRim = myRimY - manY;
+						const dlen = Math.hypot(dxRim, dyRim) || 1;
+						const ux = dxRim / dlen,
+							uy = dyRim / dlen;
+						const helpDist = isOnBall ? 3 : isWeakside ? 9 : 6;
+						const helpY = isWeakside ? (manY > 25 ? -2 : 2) : 0;
+						let tx = manX + ux * helpDist;
+						let ty = manY + uy * helpDist + helpY;
+						// Cap defender-to-man distance at 8 ft (no 20-ft sags except weakside,
+						// which is gated by helpDist above).
+						const dToMan = Math.hypot(tx - manX, ty - manY);
+						if (dToMan > 8) {
+							const k = 8 / dToMan;
+							tx = manX + (tx - manX) * k;
+							ty = manY + (ty - manY) * k;
+						}
+						// Clamp inside the playing surface so defenders don't park in the apron.
+						tx = clamp(tx, 1, 93);
+						ty = clamp(ty, 1, 49);
+						targets[dpid] = {
+							x: tx + rand(-1, 1),
+							y: ty + rand(-1, 1),
+							urgency: "sprint",
+						};
+					}
+				}
+
+				// Final 10-player spacing pass — no two players ever target overlapping
+				// positions. Runs after both offense + defense are placed so we catch
+				// off-ball defenders bumping into each other or into their own teammates.
+				// Guarded matchups (offensive player ↔ his defender) are exempt: a defender
+				// belongs right on his man, so the pass must not shove them apart.
+				if (mode !== "ft") {
+					const allPids = [...onCourt[offT], ...onCourt[defT]].map(Number);
+					const skipPairs = new Set();
+					if (matchups) {
+						for (const opid of Object.keys(matchups)) {
+							const o = Number(opid),
+								d = matchups[opid];
+							skipPairs.add(Math.min(o, d) + "|" + Math.max(o, d));
+						}
+					}
+					enforceMinSpacing(targets, allPids, 4, skipPairs);
+				}
+				return targets;
+			}
+
+			// True iff this event is a made FG/3pt (not an attempt).
+			function isMakeEvent(ev) {
+				return (
+					typeof ev?.type === "string" &&
+					/^(fg|tp)[A-Z]?/.test(ev.type) &&
+					!ev.type.startsWith("fga")
+				);
+			}
+			function isFgaEvent(ev) {
+				return typeof ev?.type === "string" && FGA_TYPES.has(ev.type);
+			}
+
+			// Plan motion for the upcoming interval. Returns:
+			//   { movers: [{ pid, x, y, urgency }], ballCarrier, ballArc? }
+			// Reads `next` (event being approached) and `next2` (the one after) so
+			// makes-with-pidAst can stage the assister at a realistic passing spot, and
+			// rebounds can pre-stage the next shooter mid-fastbreak.
+			function planMotion(next, next2, gap) {
+				const offT = possessionTeam;
+				const defT = offT === 0 ? 1 : 0;
+				const mode =
+					next.type === "ft" || next.type === "missFt" ? "ft" : "set";
+
+				const targets = buildRoleTargets(offT, defT, mode);
+				let ballCarrier = null;
+				let ballArc = null;
+
+				// 1) The fga* case — shooter sprints to shot spot. If next2 is a made FG
+				//    with pidAst, place the assister at a passing-distance spot from the
+				//    shooter and have the ball follow them until just before the make.
+				if (isFgaEvent(next)) {
+					const shooter = next.pid;
+					const [sx, sy] = shotSpotFor(next);
+					targets[shooter] = { x: sx, y: sy, urgency: "sprint" };
+
+					if (
+						next2 &&
+						isMakeEvent(next2) &&
+						next2.pidAst !== undefined &&
+						players[next2.pidAst]
+					) {
+						const assister = next2.pidAst;
+						// Pass spot: along the (shooter → away-from-rim) line, 15-22 ft out,
+						// with a perpendicular jitter so the pass isn't dead-straight.
+						const rim = RIM_X[next.t];
+						const awayX = sx - (rim - sx) * 0.5; // step further from rim
+						const awayY = sy + rand(-4, 4);
+						const dist =
+							ASSIST_PASS_DIST_MIN +
+							Math.random() * (ASSIST_PASS_DIST_MAX - ASSIST_PASS_DIST_MIN);
+						const vx = awayX - sx,
+							vy = awayY - sy;
+						const vlen = Math.hypot(vx, vy) || 1;
+						const px = sx + (vx / vlen) * dist;
+						const py = sy + (vy / vlen) * dist;
+						targets[assister] = { x: px, y: py, urgency: "jog" };
+						ballCarrier = assister;
+						ballArc = { x: sx, y: sy, dur: 0.4, peak: 4 };
+					} else {
+						ballCarrier = shooter;
+					}
+				}
+
+				// 2) Free throw — shooter walks to the line.
+				else if (mode === "ft") {
+					const rim = RIM_X[next.t];
+					const dir = next.t === 0 ? -1 : 1;
+					targets[next.pid] = { x: rim + dir * 14, y: 25, urgency: "walk" };
+					ballCarrier = next.pid;
+				}
+
+				// 3) Rebound — rebounder sprints to the rim. If next2 is a fga*, the next
+				//    shooter pre-stages during this gap so they're not 60 ft away at fire.
+				else if (next.type === "drb" || next.type === "orb") {
+					const shotRim =
+						next.t === 0
+							? next.type === "orb"
+								? 0
+								: 1
+							: next.type === "orb"
+								? 1
+								: 0;
+					const offset = shotRim === 0 ? -3 : 3;
+					targets[next.pid] = {
+						x: RIM_X[shotRim] + offset,
+						y: 25 + rand(-3, 3),
+						urgency: "sprint",
+					};
+
+					if (next2 && isFgaEvent(next2)) {
+						const [nx, ny] = shotSpotFor(next2);
+						targets[next2.pid] = { x: nx, y: ny, urgency: "jog" };
+					}
+					ballCarrier = next.pid;
+				}
+
+				// 4) Steal — thief sprints to where the ball-handler was; pre-stage next shooter.
+				else if (next.type === "stl") {
+					const tovPl = players[next.pidTov];
+					if (tovPl)
+						targets[next.pid] = { x: tovPl.x, y: tovPl.y, urgency: "sprint" };
+					if (next2 && isFgaEvent(next2)) {
+						const [nx, ny] = shotSpotFor(next2);
+						targets[next2.pid] = { x: nx, y: ny, urgency: "sprint" };
+					}
+					ballCarrier = next.pid;
+				}
+
+				// 5) Jump ball — both centers walk to center court.
+				else if (next.type === "jumpBall") {
+					targets[next.pid] = { x: 47, y: 25, urgency: "jog" };
+					targets[next.pid2] = { x: 47, y: 25, urgency: "jog" };
+				}
+
+				// 6) Paint reachability — if next2 is an at-rim/tip-in/putback, drag the
+				//    relevant shooter toward the paint regardless of their role spot.
+				if (
+					next2 &&
+					isFgaEvent(next2) &&
+					(next2.type === "fgaAtRim" ||
+						next2.type === "fgaTipIn" ||
+						next2.type === "fgaPutBack")
+				) {
+					// Drag the upcoming shooter to the exact cached shot spot in the paint.
+					if (targets[next2.pid]) {
+						const [px, py] = shotSpotFor(next2);
+						targets[next2.pid] = { x: px, y: py, urgency: "sprint" };
+					}
+				}
+
+				const movers = [];
+				for (const [pid, t] of Object.entries(targets)) {
+					movers.push({ pid: Number(pid), x: t.x, y: t.y, urgency: t.urgency });
+				}
+				return { movers, ballCarrier, ballArc };
+			}
+
+			// ── Inter-event pacing context (so scheduleInbound's deferred callback can
+			//    replan with whatever real time is left in the current gap).
+			let pacingCtx = { prev: null, gapStartedAt: 0, gap: 0 };
+
+			// Freelance ball movement: instead of the ball sitting glued to one player
+			// for the whole possession, swing it around the offense — a chain of passes
+			// that ends in the shooter's hands right as they fire. Returns true when a
+			// swing was scheduled (caller then skips its own ball-carrier assignment).
+			function maybeBallSwing(next, gapSec) {
+				clearSwing();
+				if (!next || !isFgaEvent(next) || gapSec < 3.0) return false;
+				const offT = possessionTeam;
+				const shooter = next.pid;
+				if (!players[shooter] || players[shooter].t !== offT) return false;
+				const offPids = onCourt[offT].filter((p) => players[p]);
+				if (offPids.length < 3) return false;
+
+				// Start the chain with whoever already holds the ball, else the PG.
+				const holder =
+					ball.carrier !== null && offPids.includes(ball.carrier)
+						? ball.carrier
+						: (offPids.find((p) => roleOf(p, offT) === "PG") ?? offPids[0]);
+
+				// 1–3 intermediate touches, scaled to how long the possession runs.
+				const nMid = clamp(Math.round(gapSec / 2.4) - 1, 1, 3);
+				const pool = offPids.filter((p) => p !== holder && p !== shooter);
+				for (let i = pool.length - 1; i > 0; i--) {
+					// Fisher–Yates shuffle
+					const j = Math.floor(Math.random() * (i + 1));
+					[pool[i], pool[j]] = [pool[j], pool[i]];
+				}
+				const chain = [holder, ...pool.slice(0, nMid), shooter].filter(
+					(p, i, a) => i === 0 || p !== a[i - 1],
+				);
+				if (chain.length < 2) return false;
+
+				ball.carrier = chain[0];
+				const tok = swingToken;
+				const nPass = chain.length - 1;
+				const tStart = gapSec * 0.2,
+					tEnd = gapSec * 0.86;
+				for (let k = 1; k < chain.length; k++) {
+					const frac =
+						nPass === 1
+							? tEnd
+							: tStart + (tEnd - tStart) * ((k - 1) / (nPass - 1));
+					const from = chain[k - 1],
+						to = chain[k];
+					const id = setTimeout(
+						() => {
+							if (tok !== swingToken || gameOver) return;
+							const a = players[from],
+								b = players[to];
+							if (!a || !b) return;
+							ballArcs.length = 0;
+							ballArcs.push({
+								x0: a.x + a.r * 0.8,
+								y0: a.y - a.r * 0.4,
+								x1: b.x,
+								y1: b.y,
+								peak: 2.6,
+								t0: now,
+								dur: 0.4,
+							});
+							ball.carrier = null;
+							const id2 = setTimeout(() => {
+								if (tok === swingToken && !gameOver && players[to])
+									ball.carrier = to;
+							}, 410);
+							swingTimers.push(id2);
+						},
+						Math.max(0, frac * 1000),
+					);
+					swingTimers.push(id);
+				}
+				return true;
+			}
+
+			function setupNextInterval(next, next2, gap) {
+				if (!next) return;
+				const plan = planMotion(next, next2, gap);
+
+				// Use the full gap as the tween duration — players move the entire interval,
+				// velocity-clamped, instead of snapping in fractions of it.
+				for (const m of plan.movers) {
+					if (reformExclude.has(m.pid)) continue;
+					moveTo(m.pid, m.x, m.y, gap, m.urgency);
+				}
+				// A swing supersedes the planner's single ball assignment / assist arc.
+				if (maybeBallSwing(next, gap)) return;
+				if (plan.ballCarrier !== null && players[plan.ballCarrier]) {
+					ball.carrier = plan.ballCarrier;
+				}
+				if (plan.ballArc) {
+					const leadMs = Math.max(0, (gap - PASS_LEAD_SEC) * 1000);
+					pendingMotion.push(
+						setTimeout(() => {
+							ballArcTo(
+								plan.ballArc.x,
+								plan.ballArc.y,
+								plan.ballArc.dur,
+								plan.ballArc.peak,
+							);
+						}, leadMs),
+					);
+				}
+			}
+
+			// Replan toward the next queued event with whatever real time is left in the
+			// current gap. Used by the tipoff and inbound handlers, which suspend the
+			// drain while their own animation plays and must hand motion back afterward.
+			function replanCurrentGap() {
+				if (gameOver) return;
+				const elapsedSec = (performance.now() - pacingCtx.gapStartedAt) / 1000;
+				const remaining = Math.max(MIN_DUR, pacingCtx.gap - elapsedSec);
+				const upNext = eventQueue[0],
+					upNext2 = eventQueue[1];
+				if (!upNext) return;
+				const plan = planMotion(upNext, upNext2, remaining);
+				for (const m of plan.movers) {
+					if (reformExclude.has(m.pid)) continue;
+					moveTo(m.pid, m.x, m.y, remaining, m.urgency);
+				}
+				if (maybeBallSwing(upNext, remaining)) return;
+				if (plan.ballCarrier !== null && players[plan.ballCarrier]) {
+					ball.carrier = plan.ballCarrier;
+				}
+			}
+
+			// ── Event → animation interpreter ─────────────────────────────────────────
+			function teamLabel(t) {
+				return teams[t]?.abbrev ?? `T${t}`;
+			}
+			function playerName(pid) {
+				return players[pid]?.info.name?.split(" ").slice(-1)[0] ?? `#${pid}`;
+			}
+
+			function setPlayText(msg) {
+				playEl.textContent = msg;
+			}
+			function setClock(secs) {
+				if (typeof secs !== "number") return;
+				currentClock = secs;
+				const mm = Math.floor(secs / 60);
+				const ss = Math.floor(secs % 60);
+				clockEl.textContent = `${mm}:${ss.toString().padStart(2, "0")}`;
+			}
+
+			function renderStats() {
+				const fmt = (s) =>
+					`${s.fgm}/${s.fga} FG · ${s.tpm}/${s.tpa} 3P · ${s.ftm}/${s.fta} FT · ${s.reb} reb · ${s.ast} ast`;
+				teamStatsEl.innerHTML = `<b>${teamLabel(0)}</b> ${fmt(teamStats[0])}<br><b>${teamLabel(1)}</b> ${fmt(teamStats[1])}`;
+			}
+
+			function bumpScore(t, pts) {
+				scores[t] += pts;
+				(t === 0 ? scoreH : scoreA).textContent = scores[t];
+			}
+
+			// Update which team has the ball after this event resolves. When possession
+			// flips, roll a new play type so the next trip down the floor looks different.
+			function updatePossession(ev) {
+				if (typeof ev.t !== "number") return;
+				const prev = possessionTeam;
+				const maybeRoll = () => {
+					if (possessionTeam !== prev) rollPlay();
+				};
+				// Events where ev.t IS the offensive team — possession sits with them.
+				if (
+					FGA_TYPES.has(ev.type) ||
+					ev.type === "ft" ||
+					ev.type === "missFt" ||
+					ev.type === "drb" ||
+					ev.type === "orb" ||
+					ev.type === "stl"
+				) {
+					possessionTeam = ev.t;
+					maybeRoll();
+					return;
+				}
+				// Made FG (any 2pt or 3pt make) — the OTHER team inbounds.
+				if (/^(fg|tp)[A-Z]?/.test(ev.type) && !ev.type.startsWith("fga")) {
+					possessionTeam = ev.t === 0 ? 1 : 0;
+					maybeRoll();
+					return;
+				}
+				// Turnover (ev.t = ball-loser): other team gets it.
+				if (ev.type === "tov") {
+					possessionTeam = ev.t === 0 ? 1 : 0;
+					maybeRoll();
+					return;
+				}
+				// Defensive foul (ev.t = fouler): offense keeps/regains the ball.
+				if (
+					ev.type === "pfFG" ||
+					ev.type === "pfTP" ||
+					ev.type === "pfBonus" ||
+					ev.type === "pfNonShooting"
+				) {
+					possessionTeam = ev.t === 0 ? 1 : 0;
+					maybeRoll();
+					return;
+				}
+			}
+
+			function handleEvent(ev) {
+				if (typeof ev.clock === "number") setClock(ev.clock);
+
+				switch (ev.type) {
+					case "period": {
+						currentPeriod = ev.period;
+						quarterEl.textContent =
+							currentPeriod <= 4
+								? `Q${currentPeriod}`
+								: `OT${currentPeriod - 4}`;
+						setPlayText(`Start of ${quarterEl.textContent}`);
+						// Player positions left as-is; setupNextInterval will move them toward
+						// the first action of the new period.
+						ball = { x: 47, y: 25, z: 0, carrier: null };
+						break;
+					}
+					case "overtime": {
+						currentPeriod = ev.period;
+						quarterEl.textContent = `OT${currentPeriod - 4}`;
+						setPlayText("Overtime");
+						break;
+					}
+					case "jumpBall": {
+						setPlayText(
+							`Jump ball · ${playerName(ev.pid)} vs ${playerName(ev.pid2)}`,
+						);
+						// Full tipoff: jumpers to center, scatter others, ball pops, tip to PG.
+						runTipoff();
+						break;
+					}
+					case "fgaAtRim":
+					case "fgaLowPost":
+					case "fgaMidRange":
+					case "fgaTp":
+					case "fgaTpFake":
+					case "fgaTipIn":
+					case "fgaPutBack": {
+						// Shooter goes to their (cached, deterministic) spot. Off-ball players
+						// were already moving into formation during the previous interval.
+						clearSwing(); // cancel any still-pending freelance passes
+						const [sx, sy] = shotSpotFor(ev);
+						moveTo(ev.pid, sx, sy, 0.5, "sprint");
+						ball.carrier = ev.pid;
+						const arcDur =
+							ev.type === "fgaTp" || ev.type === "fgaMidRange" ? 0.9 : 0.5;
+						const peak =
+							ev.type === "fgaTp" ? 14 : ev.type === "fgaMidRange" ? 10 : 5;
+						// Launch the shot FROM the shot spot itself — never from wherever the
+						// carrier currently is — so a shooter still in transit can't heave the
+						// ball from half-court.
+						pendingMotion.push(
+							setTimeout(() => {
+								ball.carrier = null;
+								ballArcs.length = 0;
+								ballArcs.push({
+									x0: sx,
+									y0: sy,
+									x1: RIM_X[ev.t],
+									y1: RIM_Y,
+									peak,
+									t0: now,
+									dur: arcDur,
+								});
+							}, 550),
+						);
+						if (ev.type === "fgaTp" || ev.type === "fgaTpFake")
+							teamStats[ev.t].tpa++;
+						teamStats[ev.t].fga++;
+						setPlayText(`${playerName(ev.pid)} · ${labelShot(ev.type)}`);
+						break;
+					}
+					case "fgAtRim":
+					case "fgAtRimAndOne":
+					case "fgLowPost":
+					case "fgLowPostAndOne":
+					case "fgMidRange":
+					case "fgMidRangeAndOne":
+					case "fgTipIn":
+					case "fgTipInAndOne":
+					case "fgPutBack":
+					case "fgPutBackAndOne":
+					case "tp":
+					case "tpAndOne": {
+						const tp = ev.type.startsWith("tp");
+						const pts = tp ? 3 : 2;
+						bumpScore(ev.t, pts);
+						teamStats[ev.t].fgm++;
+						if (tp) teamStats[ev.t].tpm++;
+						if (ev.pidAst !== undefined) teamStats[ev.t].ast++;
+						const andOne = ev.type.endsWith("AndOne") ? " (AndOne!)" : "";
+						setPlayText(
+							`GOOD! ${playerName(ev.pid)} · ${pts}pt${andOne}${ev.pidAst !== undefined ? " · ast " + playerName(ev.pidAst) : ""}`,
+						);
+						// AndOne FGs are followed by an FT — don't inbound yet.
+						if (!ev.type.endsWith("AndOne") && shouldInboundAfter(ev)) {
+							// ev.t scored; the OTHER team inbounds from under ev.t's rim.
+							scheduleInbound({
+								inboundT: ev.t === 0 ? 1 : 0,
+								fromX: RIM_X[ev.t],
+								fromY: 25,
+								reason: "make",
+							});
+						}
+						break;
+					}
+					case "missAtRim":
+					case "missLowPost":
+					case "missMidRange":
+					case "missTp":
+					case "missTipIn":
+					case "missPutBack": {
+						setPlayText(`MISS · ${playerName(ev.pid)} · ${labelShot(ev.type)}`);
+						break;
+					}
+					case "blkAtRim":
+					case "blkLowPost":
+					case "blkMidRange":
+					case "blkTp":
+					case "blkTipIn":
+					case "blkPutBack": {
+						teamStats[ev.t].blk++;
+						moveTo(
+							ev.pid,
+							RIM_X[ev.t === 0 ? 1 : 0] + (ev.t === 0 ? -2 : 2),
+							RIM_Y,
+							0.3,
+							"sprint",
+						);
+						setPlayText(`BLOCKED by ${playerName(ev.pid)}`);
+						break;
+					}
+					case "drb":
+					case "orb": {
+						teamStats[ev.t].reb++;
+						const shotRim =
+							ev.t === 0
+								? ev.type === "orb"
+									? 0
+									: 1
+								: ev.type === "orb"
+									? 1
+									: 0;
+						moveTo(
+							ev.pid,
+							RIM_X[shotRim] + (shotRim === 0 ? -3 : 3),
+							RIM_Y + rand(-3, 3),
+							0.4,
+							"sprint",
+						);
+						ball.carrier = ev.pid;
+						// Reform happens via setupNextInterval — possession has now flipped.
+						setPlayText(
+							`${ev.type === "orb" ? "Off." : "Def."} rebound · ${playerName(ev.pid)}`,
+						);
+						break;
+					}
+					case "tov": {
+						teamStats[ev.t].tov++;
+						setPlayText(`Turnover · ${playerName(ev.pid)}`);
+						// OOB inbound for the OTHER team from where ev.pid was standing.
+						const losingPl = players[ev.pid];
+						scheduleInbound({
+							inboundT: ev.t === 0 ? 1 : 0,
+							fromX: losingPl?.x ?? 47,
+							fromY: losingPl?.y ?? 25,
+							reason: "tov",
+						});
+						break;
+					}
+					case "stl": {
+						teamStats[ev.t].stl++;
+						ball.carrier = ev.pid;
+						const tovPl = players[ev.pidTov];
+						if (tovPl) moveTo(ev.pid, tovPl.x, tovPl.y, 0.3, "sprint");
+						// Reform happens via setupNextInterval — possession has now flipped.
+						setPlayText(`STEAL · ${playerName(ev.pid)}`);
+						break;
+					}
+					case "pfFG":
+					case "pfTP":
+					case "pfBonus":
+					case "pfNonShooting": {
+						setPlayText(`Foul · ${playerName(ev.pid)}`);
+						break;
+					}
+					case "foulOut": {
+						setPlayText(`${playerName(ev.pid)} fouls out`);
+						if (players[ev.pid]) players[ev.pid].gfx.alpha = 0.35;
+						break;
+					}
+					case "ft": {
+						teamStats[ev.t].fta++;
+						teamStats[ev.t].ftm++;
+						bumpScore(ev.t, 1);
+						const rim = RIM_X[ev.t];
+						const dir = ev.t === 0 ? -1 : 1;
+						moveTo(ev.pid, rim + dir * 14, 25, 0.4, "walk");
+						ball.carrier = ev.pid;
+						setTimeout(() => ballArcTo(rim, RIM_Y, 0.8, 8), 400);
+						setPlayText(`FT GOOD · ${playerName(ev.pid)}`);
+						if (shouldInboundAfter(ev)) {
+							scheduleInbound({
+								inboundT: ev.t === 0 ? 1 : 0,
+								fromX: RIM_X[ev.t],
+								fromY: 25,
+								reason: "make",
+							});
+						}
+						break;
+					}
+					case "missFt": {
+						teamStats[ev.t].fta++;
+						const rim = RIM_X[ev.t];
+						const dir = ev.t === 0 ? -1 : 1;
+						moveTo(ev.pid, rim + dir * 14, 25, 0.4, "walk");
+						ball.carrier = ev.pid;
+						setTimeout(() => ballArcTo(rim, RIM_Y, 0.8, 8), 400);
+						setPlayText(`FT MISS · ${playerName(ev.pid)}`);
+						break;
+					}
+					case "sub": {
+						// Replace players in onCourt; rebuild visuals if needed.
+						const t = ev.t;
+						for (let i = 0; i < ev.pidsOff.length; i++) {
+							const off = ev.pidsOff[i],
+								on = ev.pids[i];
+							const idx = onCourt[t].indexOf(off);
+							if (idx === -1) continue;
+							// Off player: fade out + park off-court.
+							const offPl = players[off];
+							if (offPl) {
+								offPl.gfx.alpha = 0.0;
+								offPl.onCourt = false;
+							}
+							// On player: instantiate if first time on court.
+							const teamInfo = teams[t];
+							let info = teamInfo?.players.find((p) => p.pid === on);
+							if (!info) info = { pid: on, name: `#${on}`, pos: "F" };
+							if (!players[on]) players[on] = makePlayer(info, t, idx);
+							else {
+								players[on].gfx.alpha = 1.0;
+								players[on].onCourt = true;
+								players[on].slot = idx;
+							}
+							onCourt[t][idx] = on;
+							const role = POS_TO_ROLE[info.pos ?? ""] ?? "SF";
+							const [x, y] = offensiveRoleSpot(t, role, currentSet[role] ?? 0);
+							players[on].x = x;
+							players[on].y = y;
+							players[on].gfx.position.set(x, y);
+						}
+						setPlayText(`${teamLabel(t)} sub`);
+						break;
+					}
+					case "timeout": {
+						setPlayText(`${teamLabel(ev.t)} timeout (${ev.numLeft} left)`);
+						break;
+					}
+					case "endOfPeriod": {
+						setPlayText(`End of ${quarterEl.textContent}`);
+						break;
+					}
+					case "outOfBounds": {
+						setPlayText(
+							`Out of bounds · ${teamLabel(ev.t)} ${ev.on === "offense" ? "ball" : "defense"}`,
+						);
+						// BBGM convention: ev.t is the team that LOST it OOB; ev.on tells us
+						// whether the offense or defense gets it (defaults: defense gets it on
+						// an offensive OOB). The team that GAINS possession inbounds.
+						const inboundT = ev.on === "offense" ? ev.t : ev.t === 0 ? 1 : 0;
+						scheduleInbound({
+							inboundT,
+							fromX: ball.x,
+							fromY: ball.y,
+							reason: "oob",
+						});
+						break;
+					}
+					case "injury": {
+						setPlayText(`Injury · ${playerName(ev.pid)}`);
+						break;
+					}
+					case "gameOver": {
+						gameOver = true;
+						const w = scores[0] > scores[1] ? 0 : 1;
+						setPlayText(
+							`FINAL · ${teamLabel(w)} wins ${scores[w]}–${scores[1 - w]}`,
+						);
+						quarterEl.textContent = "FINAL";
+						break;
+					}
+					default:
+						// Silently ignore unknown event types.
+						break;
+				}
+				renderStats();
+			}
+
+			function labelShot(type) {
+				return (
+					{
+						fgaAtRim: "drive at rim",
+						fgaLowPost: "low post",
+						fgaMidRange: "mid-range jumper",
+						fgaTp: "three",
+						fgaTpFake: "pump-fake three",
+						fgaTipIn: "tip in",
+						fgaPutBack: "put-back",
+						missAtRim: "at-rim attempt",
+						missLowPost: "low post",
+						missMidRange: "mid-range",
+						missTp: "three",
+						missTipIn: "tip in",
+						missPutBack: "put-back",
+					}[type] ?? type
+				);
+			}
+
+			// ── Event pacing with full-game lookahead ─────────────────────────────────
+			// The entire pre-simulated game arrives in one gameStart packet, so we ALWAYS
+			// know the next event before processing the current one. That's what makes
+			// motion realistic: the shooter for event N+1 starts moving toward the elbow
+			// the moment event N (a defensive rebound, say) resolves — and arrives just as
+			// event N+1 fires.
+			const eventQueue = [];
+			let nextEarliestMs = 0;
+			let drainTimer = null;
+
+			function scheduleDrain() {
+				if (drainTimer !== null) return;
+				if (eventQueue.length === 0) return;
+				const wait = Math.max(0, nextEarliestMs - performance.now());
+				drainTimer = setTimeout(() => {
+					drainTimer = null;
+					if (eventQueue.length === 0) return;
+					const ev = eventQueue.shift();
+					handleEvent(ev);
+					updatePossession(ev);
+
+					// Real-time gap until the NEXT event in the queue, derived from game-clock.
+					const next = eventQueue[0];
+					let deltaSec = 1.0;
+					if (
+						next &&
+						typeof ev.clock === "number" &&
+						typeof next.clock === "number" &&
+						next.clock <= ev.clock
+					) {
+						deltaSec = ev.clock - next.clock;
+					}
+					// Floor 1.8s so motion reads as motion (and event clusters that share a
+					// clock don't fire instantly). The REAL-TIME gap is then clamped to
+					// [1.5s, 3.2s]: a long game-clock delta (e.g. 20s between the tipoff and
+					// the first shot) must not leave the floor frozen for many real seconds —
+					// that dead air was the "frozen tipoff" bug.
+					deltaSec = Math.max(1.8, Math.min(deltaSec, 5.0));
+					const gapRealSec = Math.max(1.5, Math.min(deltaSec / speed, 3.2));
+
+					// 2-event lookahead: pass N+1 AND N+2 so planMotion can stage assists
+					// (assister parks at passing distance before the make fires) and
+					// pre-stage fastbreak shooters during rebounds/steals.
+					const next2 = eventQueue[1];
+					pacingCtx = {
+						prev: ev,
+						gapStartedAt: performance.now(),
+						gap: gapRealSec,
+					};
+					setupNextInterval(next, next2, gapRealSec);
+
+					// Math.max so tipoff/inbound handlers that pre-extend the gap (via their
+					// own nextEarliestMs += duration) aren't truncated by this baseline gap.
+					nextEarliestMs = Math.max(
+						nextEarliestMs,
+						performance.now() + gapRealSec * 1000,
+					);
+					scheduleDrain();
+				}, wait);
+			}
+
+			// ── WebSocket ─────────────────────────────────────────────────────────────
+			let ws;
+			function connect() {
+				const proto = location.protocol === "https:" ? "wss" : "ws";
+				ws = new WebSocket(`${proto}://${location.host}/api/simcast`);
+				ws.onopen = () => setConn("idle", "connected");
+				ws.onclose = () => {
+					setConn("dead", "disconnected");
+					setTimeout(connect, 1500);
+				};
+				ws.onerror = () => setConn("dead", "error");
+				ws.onmessage = (msg) => {
+					let m;
+					try {
+						m = JSON.parse(msg.data);
+					} catch {
+						return;
+					}
+					if (m.kind === "gameStart") {
+						setConn("live", "live");
+						initFromGameStart(m);
+					}
+					// No more "event" messages — the entire game arrives in gameStart.events.
+				};
+			}
+			connect();
+
+			// ── Debug hook (browser_evaluate inspection) ──────────────────────────────
+			window.__SIM = () => ({
+				possessionTeam,
+				currentPlay,
+				gameOver,
+				queueLen: eventQueue.length,
+				tweens: tweens.length,
+				drainTimer: drainTimer !== null,
+				waitMs: Math.round(nextEarliestMs - performance.now()),
+				nextEv: eventQueue[0]?.type ?? null,
+				ball: {
+					x: +ball.x.toFixed(1),
+					y: +ball.y.toFixed(1),
+					z: +ball.z.toFixed(1),
+					carrier: ball.carrier,
+				},
+				play: playEl.textContent,
+				clock: clockEl.textContent,
+				players: Object.entries(players)
+					.filter(([, p]) => p.onCourt)
+					.map(([pid, p]) => ({
+						pid: +pid,
+						t: p.t,
+						pos: p.info.pos,
+						x: +p.x.toFixed(1),
+						y: +p.y.toFixed(1),
+					})),
+			});
+			// Court-calibration debug: fade the textured court to reveal the procedural
+			// rim/key drawn at exact logical coords, so the two can be visually compared.
+			window.__courtAlpha = (a) => {
+				if (courtSprite) courtSprite.alpha = a;
+			};
+
+			// ── Ticker (animation only) ───────────────────────────────────────────────
+			app.ticker.add((ticker) => {
+				const dt = ticker.deltaMS / 1000;
+				now += dt;
+
+				// Apply tweens.
+				for (let i = tweens.length - 1; i >= 0; i--) {
+					const tw = tweens[i];
+					const u = Math.min(1, (now - tw.t0) / tw.dur);
+					const e = easeInOutQuad(u);
+					const pl = players[tw.pid];
+					if (!pl) {
+						tweens.splice(i, 1);
+						continue;
+					}
+					pl.x = tw.x0 + (tw.x1 - tw.x0) * e;
+					pl.y = tw.y0 + (tw.y1 - tw.y0) * e;
+					pl.gfx.position.set(pl.x, pl.y);
+					if (u >= 1) tweens.splice(i, 1);
+				}
+
+				// Idle drift on anyone not tweening (Tier 2).
+				const moving = new Set(tweens.map((t) => t.pid));
+				for (const pid in players) {
+					const pl = players[pid];
+					if (!pl.onCourt || moving.has(pid)) continue;
+					driftSeeds[pid] += dt * 0.5;
+					pl.x += Math.cos(driftSeeds[pid]) * 0.08 * dt;
+					pl.y += Math.sin(driftSeeds[pid] * 1.3) * 0.07 * dt;
+					pl.gfx.position.set(pl.x, pl.y);
+				}
+
+				// Pairwise collision avoidance — push overlapping players apart so they
+				// never visually stack regardless of tween targets.
+				const COLLISION_R = 1.5; // soft-collision radius (≈ one dot wide)
+				const onCourtPids = [];
+				for (const pid in players) {
+					if (players[pid].onCourt) onCourtPids.push(pid);
+				}
+				for (let i = 0; i < onCourtPids.length; i++) {
+					for (let j = i + 1; j < onCourtPids.length; j++) {
+						const a = players[onCourtPids[i]];
+						const b = players[onCourtPids[j]];
+						const dx = b.x - a.x,
+							dy = b.y - a.y;
+						const d = Math.hypot(dx, dy);
+						const minD = COLLISION_R * 2;
+						if (d < minD && d > 0.01) {
+							const push = (minD - d) / 2 + 0.02;
+							const ux = dx / d,
+								uy = dy / d;
+							a.x -= ux * push;
+							a.y -= uy * push;
+							b.x += ux * push;
+							b.y += uy * push;
+							a.gfx.position.set(a.x, a.y);
+							b.gfx.position.set(b.x, b.y);
+						}
+					}
+				}
+
+				// Boundary clamp — no player escapes the apron.
+				const MIN_X = -APRON_FT,
+					MAX_X = COURT.length + APRON_FT;
+				const MIN_Y = -APRON_FT,
+					MAX_Y = COURT.width + APRON_FT;
+				for (const pid of onCourtPids) {
+					const pl = players[pid];
+					let cx = pl.x,
+						cy = pl.y;
+					if (cx < MIN_X) cx = MIN_X;
+					else if (cx > MAX_X) cx = MAX_X;
+					if (cy < MIN_Y) cy = MIN_Y;
+					else if (cy > MAX_Y) cy = MAX_Y;
+					if (cx !== pl.x || cy !== pl.y) {
+						pl.x = cx;
+						pl.y = cy;
+						pl.gfx.position.set(cx, cy);
+					}
+				}
+
+				// Name-label collision pass — when another player sits directly below a
+				// dot, flip this dot's name label above so the two labels don't stack.
+				// Cheap heuristic: scan neighbors within a thin horizontal band.
+				const LABEL_DX = 2.6; // horizontal proximity that would cause label overlap
+				const LABEL_DY = 2.6; // vertical proximity below dot where a neighbor's
+				// dot/label would collide with our default-below label
+				for (let i = 0; i < onCourtPids.length; i++) {
+					const a = players[onCourtPids[i]];
+					if (!a.nameLabel) continue;
+					let flipUp = false;
+					for (let j = 0; j < onCourtPids.length; j++) {
+						if (i === j) continue;
+						const b = players[onCourtPids[j]];
+						const dx = Math.abs(b.x - a.x);
+						const dy = b.y - a.y; // positive when b is below a (court y grows down)
+						if (dx < LABEL_DX && dy > 0 && dy < LABEL_DY) {
+							flipUp = true;
+							break;
+						}
+					}
+					if (flipUp !== a.nameAbove) {
+						if (flipUp) {
+							a.nameLabel.anchor.set(0.5, 1);
+							a.nameLabel.position.set(0, -a.r - 0.25);
+						} else {
+							a.nameLabel.anchor.set(0.5, 0);
+							a.nameLabel.position.set(0, a.r + 0.25);
+						}
+						a.nameAbove = flipUp;
+					}
+				}
+
+				// Ball.
+				if (ball.carrier && players[ball.carrier]) {
+					const c = players[ball.carrier];
+					ball.x = c.x + c.r * 0.8;
+					ball.y = c.y - c.r * 0.4;
+					ball.z = 0;
+				} else if (ballArcs.length) {
+					const a = ballArcs[0];
+					const u = Math.min(1, (now - a.t0) / a.dur);
+					ball.x = a.x0 + (a.x1 - a.x0) * u;
+					ball.y = a.y0 + (a.y1 - a.y0) * u;
+					ball.z = 4 * a.peak * u * (1 - u);
+					if (u >= 1) ballArcs.shift();
+				}
+				ballShadow.position.set(ball.x, ball.y);
+				ballGfx.position.set(ball.x, ball.y - ball.z * 0.5);
+				const shrink = 1 - Math.min(0.5, ball.z * 0.05);
+				ballShadow.scale.set(shrink, shrink);
+			});
+		</script>
+	</body>
+</html>

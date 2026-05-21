@@ -12,3 +12,13 @@
 /foo
 /.vscode
 /tools/names-groups-html
+/data/server/
+/server/node_modules/
+/ecosystem.config.cjs
+/screenshots/
+__pycache__/
+# Court image database (~780M of JPGs) — kept local only.
+# Raw courts/ is a downloaded asset; courts/std/ is regenerable via
+# server/scripts/standardize-courts.py. manifest.json is kept (text config).
+/server/public/courts/*
+!/server/public/courts/manifest.json

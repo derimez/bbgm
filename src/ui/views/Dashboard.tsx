@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { useCallback, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { Dropdown } from "react-bootstrap";
 import ago from "s-ago";
 import {
@@ -201,11 +201,24 @@ const dropdownStyle: CSSProperties = {
 	position: "static",
 };
 
+type ServerLeague = { lid: number; name: string; saved_at: number };
+
 const Dashboard = ({ leagues }: View<"dashboard">) => {
 	const [loadingLID, setLoadingLID] = useState<number | undefined>();
 	const [deletingLID, setDeletingLID] = useState<number | undefined>();
 	const [cloningLID, setCloningLID] = useState<number | undefined>();
+	const [serverLeagues, setServerLeagues] = useState<ServerLeague[]>([]);
 	useTitleBar();
+
+	useEffect(() => {
+		fetch("/api/leagues")
+			.then((r) => r.json())
+			.then((all: ServerLeague[]) => {
+				const localLids = new Set(leagues.map((l) => l.lid));
+				setServerLeagues(all.filter((sl) => !localLids.has(sl.lid)));
+			})
+			.catch(() => {});
+	}, [leagues]);
 
 	const cols = getCols(
 		[
@@ -508,6 +521,30 @@ const Dashboard = ({ leagues }: View<"dashboard">) => {
 					small={false}
 					rows={rows}
 				/>
+			) : null}
+
+			{serverLeagues.length > 0 ? (
+				<div className="mt-4">
+					<h2>Sync from Server</h2>
+					<ul className="list-group" style={{ maxWidth: 480 }}>
+						{serverLeagues.map((sl) => {
+							const restoreUrl = `/new_league#importUrl=${encodeURIComponent(
+								`${window.location.origin}/api/restore/${sl.lid}`,
+							)}`;
+							return (
+								<li
+									key={sl.lid}
+									className="list-group-item d-flex justify-content-between align-items-center"
+								>
+									<span>{sl.name ?? `League ${sl.lid}`}</span>
+									<a href={restoreUrl} className="btn btn-sm btn-primary">
+										Restore
+									</a>
+								</li>
+							);
+						})}
+					</ul>
+				</div>
 			) : null}
 		</>
 	);

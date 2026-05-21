@@ -230,16 +230,10 @@ class BasketballPlayByPlayLogger extends PlayByPlayLoggerBase<PlayByPlayEventOut
 			this.period = event.period;
 		}
 
-		if (isScoringPlay(event)) {
-			const event2 = {
-				...event,
-				period: this.period,
-			};
-			if (this.active) {
-				this.playByPlay.push(event2);
-			}
-		} else {
-			if (this.active) {
+		if (this.active) {
+			if (isScoringPlay(event)) {
+				this.playByPlay.push({ ...event, period: this.period });
+			} else {
 				this.playByPlay.push(event);
 			}
 		}
