@@ -27,7 +27,16 @@ import { unregisterServiceWorkers } from "./util/unregisterServiceWorkers.ts";
 import { safeLocalStorage } from "./util/safeLocalStorage.ts";
 import { logEvent } from "./util/logEvent.ts";
 import { toWorker } from "./util/toWorker.ts";
-window.bbgm = { api, logEvent, toWorker };
+import { pushNow, deleteFromServer } from "./util/bbgmSync.ts";
+import { hardRefresh } from "./util/hardRefresh.ts";
+window.bbgm = {
+	api,
+	logEvent,
+	toWorker,
+	sync: pushNow,
+	deleteFromServer,
+	hardRefresh,
+};
 
 const handleVersion = async () => {
 	window.addEventListener("storage", (e) => {

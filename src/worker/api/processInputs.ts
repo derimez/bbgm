@@ -686,7 +686,7 @@ const playerStats = (params: Params) => {
 
 	const defaultStatType = bySport({
 		baseball: "batting",
-		basketball: "perGame",
+		basketball: "advanced",
 		football: "passing",
 		hockey: "skater",
 	});

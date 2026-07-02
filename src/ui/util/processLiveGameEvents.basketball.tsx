@@ -50,6 +50,11 @@ const simcastBroadcast = (e: any, boxScore: any, events: any[]) => {
 					region: boxScore.teams[t].region,
 					name: boxScore.teams[t].name,
 					colors: boxScore.teams[t].colors,
+					// Per-team season so the court picker uses the HOME team's era. In
+					// exhibitions the two teams can be from different seasons (e.g. 2017
+					// GSW vs 1995 CHI), so the game-level season picks the wrong arena.
+					// Only exhibition sets this; league games fall back to packet.season.
+					season: boxScore.teams[t].season,
 					players: (boxScore.teams[t].players ?? []).map((p: any) => ({
 						pid: p.pid,
 						name: p.name,

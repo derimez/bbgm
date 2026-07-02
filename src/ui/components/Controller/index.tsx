@@ -2,7 +2,6 @@ import { LazyMotion } from "framer-motion";
 import { memo, useCallback, useEffect } from "react";
 import { localActions, useLocal } from "../../util/local.ts";
 import { CommandPalette } from "../CommandPalette/index.tsx";
-import { Footer } from "./Footer.tsx";
 import { Header } from "./Header.tsx";
 import { LeagueTopBar } from "./LeagueTopBar.tsx";
 import { MultiTeamMenu } from "./MultiTeamMenu.tsx";
@@ -16,6 +15,7 @@ import { useViewData } from "../../util/viewManager.tsx";
 import { isSport } from "../../../common/sportFunctions.ts";
 import api from "../../api/index.ts";
 import { ErrorBoundary } from "../ErrorBoundary.tsx";
+import AssistantGM from "../AssistantGM/index.tsx";
 
 const loadFramerMotionFeatures = () =>
 	import("../../util/framerMotionFeatures.ts").then((res) => res.default);
@@ -106,7 +106,13 @@ export const Controller = () => {
 						<div className="d-flex" style={minHeight100}>
 							<div className="w-100 d-flex flex-column" style={minWidth0}>
 								<Header />
-								<main id="actual-actual-content" className="clearfix">
+								<main
+									id="actual-actual-content"
+									className="clearfix"
+									style={{
+										paddingBottom: "calc(2rem + env(safe-area-inset-bottom))",
+									}}
+								>
 									<ErrorBoundary key={idLoaded}>
 										{Component ? (
 											<KeepPreviousRenderWhileUpdating updating={updating}>
@@ -116,7 +122,6 @@ export const Controller = () => {
 										{inLeague ? <MultiTeamMenu /> : null}
 									</ErrorBoundary>
 								</main>
-								<Footer />
 							</div>
 							<Skyscraper />
 						</div>
@@ -125,6 +130,7 @@ export const Controller = () => {
 					</div>
 				</div>
 			</div>
+			{inLeague && !popup ? <AssistantGM /> : null}
 			<Notifications />
 		</LazyMotion>
 	);

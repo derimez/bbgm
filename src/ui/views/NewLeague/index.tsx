@@ -1,5 +1,12 @@
 import { m, AnimatePresence } from "framer-motion";
-import { useState, useReducer, useCallback, useEffect, useId } from "react";
+import {
+	useState,
+	useReducer,
+	useCallback,
+	useEffect,
+	useId,
+	useRef,
+} from "react";
 import {
 	DIFFICULTY,
 	PHASE,
@@ -51,6 +58,7 @@ import { NextPrevButtons } from "../../components/NextPrevButtons.tsx";
 import { confirm } from "../../util/confirm.tsx";
 import { safeLocalStorage } from "../../util/safeLocalStorage.ts";
 import { realtimeUpdate } from "../../util/realtimeUpdate.ts";
+import { AUTO_PULL_KEY } from "../../util/bbgmSync.ts";
 import { applyRealTeamInfo } from "../../../common/applyRealTeamInfo.ts";
 import { gameAttributesArrayToObject } from "../../../common/gameAttributesArrayToObject.ts";
 import { unwrapGameAttribute } from "../../../common/unwrapGameAttribute.ts";
@@ -705,7 +713,14 @@ const NewLeague = (props: View<"newLeague">) => {
 		reducer,
 		props,
 		(props: View<"newLeague">): State => {
-			let customize: State["customize"] = "default";
+			// Default new leagues to real, period-correct NBA teams + players when the
+			// real-player database is available (this fork always ships it). Stock
+			// ZenGM defaults to "default" = fictional teams ("Gangsters", "Unicorns"),
+			// which we never want here. Falls back to "default" only if real data is
+			// somehow absent.
+			let customize: State["customize"] = REAL_PLAYERS_INFO
+				? "real"
+				: "default";
 			if (importing) {
 				customize = "custom-rosters";
 			}
@@ -810,16 +825,35 @@ const NewLeague = (props: View<"newLeague">) => {
 			? state.teams
 			: teamsDefault;
 
+	// Cross-device auto-pull (custom fork): when checkAndPullOnLoad hands off to
+	// this import-over-lid page, it leaves a flag in localStorage so we can skip
+	// the overwrite confirm and auto-submit. The orchestrator already verified
+	// the pull is safe (server newer + local clean, or the user chose "Take
+	// server"), so re-confirming would just interrupt the "automatic" UX.
+	const isAutoPull = (): boolean => {
+		const raw = safeLocalStorage.getItem(AUTO_PULL_KEY);
+		if (!raw) return false;
+		try {
+			return JSON.parse(raw).lid === props.lid;
+		} catch {
+			return false;
+		}
+	};
+
 	const createLeague = async (settingsOverride?: State["settings"]) => {
 		if (importing) {
-			const result = await confirm(
-				`Are you sure you want to import this league? All the data currently in "${props.name}" will be overwritten.`,
-				{
-					okText: title,
-				},
-			);
-			if (!result) {
-				return;
+			if (isAutoPull()) {
+				safeLocalStorage.removeItem(AUTO_PULL_KEY);
+			} else {
+				const result = await confirm(
+					`Are you sure you want to import this league? All the data currently in "${props.name}" will be overwritten.`,
+					{
+						okText: title,
+					},
+				);
+				if (!result) {
+					return;
+				}
 			}
 		}
 
@@ -934,6 +968,26 @@ const NewLeague = (props: View<"newLeague">) => {
 			});
 		}
 	};
+
+	// Cross-device auto-pull: once the server snapshot has finished loading into
+	// the form, submit the import automatically (fires exactly once).
+	const autoPullFiredRef = useRef(false);
+	useEffect(() => {
+		if (autoPullFiredRef.current || !importing || !isAutoPull()) {
+			return;
+		}
+		// Ready to submit once the imported file is parsed into the form. Note
+		// pendingInitialLeagueInfo is NOT cleared by the import path, so it's not
+		// a valid readiness signal here — basicInfo + not-loading is sufficient.
+		const ready =
+			!!state.basicInfo && !state.loadingLeagueFile && !state.creating;
+		if (!ready) {
+			return;
+		}
+		autoPullFiredRef.current = true;
+		void createLeague(state.settings);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [importing, state.basicInfo, state.loadingLeagueFile, state.creating]);
 
 	const handleNewLeagueFile = (
 		error: Error | null,

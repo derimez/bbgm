@@ -5,6 +5,7 @@ import {
 } from "../../../../common/types.ts";
 import { idb } from "../../../db/index.ts";
 import logEvent from "../../../util/logEvent.ts";
+import seedRealOverrides from "../seedRealOverrides.ts";
 
 const getRealTeamPlayerData = async (
 	{
@@ -19,6 +20,10 @@ const getRealTeamPlayerData = async (
 	let realPlayerPhotos;
 	let realTeamInfo;
 	if (fileHasPlayers || fileHasTeams) {
+		// Ensure the fork's real team info + player photos are seeded before we read
+		// them, so generated real-roster leagues bake in real logos and photos.
+		await seedRealOverrides();
+
 		const attributesStore = (await idb.meta.transaction("attributes")).store;
 		if (fileHasPlayers) {
 			const raw = await attributesStore.get("realPlayerPhotos");

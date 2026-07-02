@@ -1,6 +1,10 @@
 import { realtimeUpdate } from "../util/realtimeUpdate.ts";
 import { local, localActions } from "../util/local.ts";
-import { triggerSync } from "../util/bbgmSync.ts";
+import {
+	markDirty,
+	checkAndPullOnLoad,
+	scheduleWarmSnapshot,
+} from "../util/bbgmSync.ts";
 import { showEvent } from "../util/logEvent.ts";
 import type {
 	LocalStateUI,
@@ -54,7 +58,19 @@ async function realtimeUpdate2(
 ) {
 	await realtimeUpdate(updateEvents, url, raw);
 	if (updateEvents.includes("gameSim")) {
-		triggerSync();
+		// Mark this device's league as having unpushed changes. Pushing is the
+		// manual "Sync ⬆" button (see bbgmSync.pushNow) — we never auto-push, so
+		// two devices can't silently overwrite each other.
+		markDirty();
+	}
+	if (updateEvents.includes("firstRun")) {
+		// "Read latest is automatic": on opening a league, pull a newer server
+		// copy if one exists (guarded against conflicts). No-op off-league.
+		void checkAndPullOnLoad();
+
+		// Pre-build the Export Snapshot cache so the first tap of Tools > Export
+		// Snapshot copies instantly. Debounced so it stays out of the load path.
+		scheduleWarmSnapshot();
 	}
 }
 

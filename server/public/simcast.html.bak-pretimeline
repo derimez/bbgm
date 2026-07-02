@@ -656,9 +656,7 @@
 			const ROLE_SLOTS = ["PG", "SG", "SF", "PF", "C"];
 			let roleAssign = {}; // pid → one of the 5 distinct role slots
 			function assignRolesForTeam(t) {
-				const pids = (onCourt[t] ?? []).filter(
-					(pid) => players[pid] || teams[t],
-				);
+				const pids = (onCourt[t] ?? []).filter((pid) => players[pid] || teams[t]);
 				const ranked = pids
 					.map((pid) => {
 						const info =
@@ -780,14 +778,13 @@
 			const speedVal = document.getElementById("speed-val");
 
 			// Manual multiplier ON TOP of the BBGM-slaved gameRate. 1× = exactly BBGM's
-			// pace; default 0.35× so the on-court motion is slow enough to actually study
-			// (BBGM's own slider only paces the play-by-play, not this animation). Lower
-			// value → bigger event gaps → calmer, less "zippy" motion. Drag up toward 1× to
-			// track BBGM in real time; drag toward the 0.15 min for true slow-mo. Below ~0.9×
-			// blur-catch-up is disabled (see scheduleDrain) so slow really stays slow.
-			let speed = 0.35;
-			speedEl.value = "0.35";
-			speedVal.textContent = "0.35×";
+			// pace; default 0.5× so the on-court motion is slow enough to actually study
+			// (BBGM's own slider only paces the play-by-play, not this animation). Drag it
+			// up toward 1× to track BBGM in real time. Below ~0.9× the blur-catch-up is
+			// disabled (see scheduleDrain) so slow really stays slow.
+			let speed = 0.5;
+			speedEl.value = "0.5";
+			speedVal.textContent = "0.5×";
 			speedEl.addEventListener("input", () => {
 				speed = parseFloat(speedEl.value);
 				speedVal.textContent = `${speed.toFixed(2).replace(/\.?0+$/, "")}×`;
@@ -1218,7 +1215,6 @@
 					vx: 0, // velocity (ft/s)
 					vy: 0,
 					maxSpeed: MAX_FPS_BY_URGENCY.jog,
-					kf: [{ c: playhead !== null ? playhead : 720, x, y }], // timeline track
 					t,
 					info: pInfo,
 					r,
@@ -1401,9 +1397,6 @@
 				currentClock = null;
 				gameOver = false;
 				possessionTeam = 0;
-				// Reset the timeline playhead so a fresh game re-inits it from its first event.
-				playhead = null;
-				playheadPeriod = 1;
 				// Reset playback-sync so a game that ended paused doesn't freeze the next one.
 				paused = false;
 				gameRate = DEFAULT_GAME_RATE;
@@ -1430,11 +1423,6 @@
 				nextEarliestMs = performance.now();
 				const incoming = Array.isArray(packet.events) ? packet.events : [];
 				for (const ev of incoming) eventQueue.push(ev);
-
-				// Offline pass: walk the entire (already-simulated) game once and stamp each
-				// event with its globally-aware off-ball formation (see buildGameChoreography).
-				// teams + the starting fives are set above, so it has everything it needs.
-				buildGameChoreography(incoming);
 
 				// Tipoff: both centers walk to center court, ball pops up, one team wins,
 				// ball tips out to that team's PG. Always run it inline here — never via
@@ -1620,81 +1608,6 @@
 			const ballArcs = []; // {x0, y0, x1, y1, peak, t0, dur, onLand?}
 			let now = 0; // monotonic seconds — advances only while unpaused (the sim-clock)
 
-			// ── Timeline motion core (position = f(playhead)) ──────────────────────────
-			// The motion engine is a TIMELINE, not a per-frame steerer: every player follows
-			// a KEYFRAME TRACK (array of {c,x,y}, c = game-seconds remaining, strictly
-			// descending) sampled by a smooth game-clock PLAYHEAD via Catmull-Rom. That gives
-			// C1-continuous paths, so players flow THROUGH their waypoints instead of easing to
-			// a dead stop at each one (the old stutter). moveTo() just appends a keyframe (see
-			// its redefinition below), so every existing event handler / choreography beat
-			// feeds the timeline with no other change.
-			let playhead = null; // current game-sec remaining (smoothly advanced); null pre-tip
-			let playheadPeriod = 1;
-			function catmull(p0, p1, p2, p3, t) {
-				const t2 = t * t,
-					t3 = t2 * t;
-				return (
-					0.5 *
-					(2 * p1 +
-						(-p0 + p2) * t +
-						(2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
-						(-p0 + 3 * p1 - 3 * p2 + p3) * t3)
-				);
-			}
-			// Sample a track at clock c. Tracks are DESCENDING in c (clock counts down).
-			function sampleTrack(kf, c) {
-				const n = kf.length;
-				if (n === 0) return null;
-				if (n === 1 || c >= kf[0].c) return { x: kf[0].x, y: kf[0].y };
-				if (c <= kf[n - 1].c) return { x: kf[n - 1].x, y: kf[n - 1].y };
-				let i = 0;
-				while (i < n - 1 && kf[i + 1].c > c) i++;
-				const p1 = kf[i],
-					p2 = kf[i + 1];
-				const p0 = kf[i - 1] || p1,
-					p3 = kf[i + 2] || p2;
-				const span = p1.c - p2.c || 1e-3;
-				const u = clamp((p1.c - c) / span, 0, 1);
-				let rx = catmull(p0.x, p1.x, p2.x, p3.x, u);
-				let ry = catmull(p0.y, p1.y, p2.y, p3.y, u);
-				// Clamp against Catmull-Rom overshoot: irregular waypoints can send the spline
-				// far outside the segment it's meant to traverse (a 60-ft flyout). Keep the
-				// sample within the p1→p2 bounding box plus a modest margin so it stays smooth
-				// without ever teleporting.
-				const mx = Math.max(4, Math.abs(p2.x - p1.x) * 0.3);
-				const my = Math.max(4, Math.abs(p2.y - p1.y) * 0.3);
-				rx = clamp(rx, Math.min(p1.x, p2.x) - mx, Math.max(p1.x, p2.x) + mx);
-				ry = clamp(ry, Math.min(p1.y, p2.y) - my, Math.max(p1.y, p2.y) + my);
-				return { x: rx, y: ry };
-			}
-			// Append a keyframe at clock c. Anchors the current sampled position at the
-			// playhead first (so a mid-leg re-plan starts from where the player visibly is,
-			// no jump), drops any superseded keyframes at/after c, then pushes the new one.
-			function addKeyframe(pl, c, x, y) {
-				if (!pl.kf) pl.kf = [];
-				const kf = pl.kf;
-				if (
-					playhead !== null &&
-					playhead > c + 0.02 &&
-					(kf.length === 0 || kf[kf.length - 1].c > playhead + 0.02)
-				) {
-					const p = sampleTrack(kf, playhead) || { x: pl.x, y: pl.y };
-					kf.push({ c: playhead, x: p.x, y: p.y });
-				}
-				while (kf.length && kf[kf.length - 1].c <= c + 1e-6) kf.pop();
-				kf.push({ c, x, y });
-			}
-			// Hard-anchor a track to a single point at the playhead (teleports, tipoff).
-			function resetTrack(pl, x, y) {
-				const c = playhead !== null ? playhead : 720;
-				pl.kf = [{ c, x, y }];
-			}
-			// Trim stale history, keeping two past keyframes for Catmull context.
-			function pruneTrack(kf) {
-				if (playhead === null) return;
-				while (kf.length > 3 && kf[2].c > playhead) kf.shift();
-			}
-
 			// ── Playback sync to BBGM (Phase 1) ────────────────────────────────────────
 			// Simcast is a rendering SLAVE to BBGM's LiveGame playback. BBGM emits a
 			// `control` frame on every processToNextPause advance (its real heartbeat) and
@@ -1735,28 +1648,24 @@
 			function moveTo(pid, x, y, dur = 0.5, urgency = "jog") {
 				const pl = players[pid];
 				if (!pl) return;
+				const cap =
+					(MAX_FPS_BY_URGENCY[urgency] ?? MAX_FPS_BY_URGENCY.jog) *
+					MOTION_SCALE *
+					paceScale();
+				const effDur = Math.max(dur, MIN_DUR);
+				const dist = Math.hypot(x - pl.x, y - pl.y);
 				pl.tx = x;
 				pl.ty = y;
-				// Timeline model: land a keyframe at the clock this leg should COMPLETE. `dur`
-				// is the intended real-seconds for the move; convert to a game-clock span via
-				// the live effRate so the waypoint sits at the right spot on the playhead. The
-				// player then splines from wherever they are toward it — speed falls out of the
-				// distance and the span, and is inherently pace-linked (slow game → slow leg).
-				const eff = Math.max(0.4, gameRate * speed);
-				// Global speed ceiling: no move — from ANY caller (choreographer, shooter,
-				// rebounder, inbound step-in) — may exceed MAX_FPS ft/s. Fixed-duration handler
-				// moves (e.g. a 0.3s rebound crash) would otherwise bolt across the floor at the
-				// slowest sim speed while everyone else creeps. Stretching dur here just makes
-				// them glide; arrival-polling (whenShooterSet) still fires on proximity.
-				const dist = Math.hypot(x - pl.x, y - pl.y);
-				const durFloor = dist / (typeof MAX_FPS === "number" ? MAX_FPS : 20);
-				const spanGame = Math.max(dur, durFloor, MIN_DUR) * eff;
-				const base = playhead !== null ? playhead : 720;
-				addKeyframe(pl, base - spanGame, x, y);
+				// Speed to cover the distance in ~dur, floored so short hops still glide and
+				// capped by the (scaled) urgency ceiling.
+				pl.maxSpeed = Math.max(
+					MIN_MOVE_SPEED,
+					Math.min(cap, dist / effDur),
+				);
 			}
 
-			// Hard-place a player (tipoff, inbounder stepping OOB) — snap position AND reset
-			// the timeline track to that point so they don't spline back toward a stale spot.
+			// Hard-place a player (tipoff, inbounder stepping OOB) — snap position AND clear
+			// the steering target/velocity so they don't drift back toward a stale spot.
 			function snapPlayer(pid, x, y) {
 				const pl = players[pid];
 				if (!pl) return;
@@ -1766,7 +1675,6 @@
 				pl.ty = y;
 				pl.vx = 0;
 				pl.vy = 0;
-				resetTrack(pl, x, y);
 				pl.gfx.position.set(x, y);
 			}
 
@@ -1996,21 +1904,14 @@
 				// out of bounds.)
 				const D = INBOUND_DURATION_MS;
 
-				// t ≈ 0.04·D: the inbounder is handed the ball out of bounds — GLIDE them onto
-				// the apron (not a snap: a snap teleported the dot across the floor on every
-				// made basket). After a made basket the inbounder is the nearest defender to
-				// this baseline, so the hop is short and they reach OOB well before the pass
-				// beat at 0.64·D. The ball rides with them, so it still reads as an OOB inbound.
+				// t ≈ 0.04·D: the inbounder is handed the ball already out of bounds — place
+				// them ON the apron (a snap, not a glide, so they truly reach OOB at any pace
+				// instead of drifting a half-step and passing from in-bounds). The ball rides
+				// with them, so it's visibly an out-of-bounds inbound. The outlet breaks open.
 				pendingMotion.push(
 					setTimeout(() => {
 						ball.carrier = inbounder;
-						moveTo(
-							inbounder,
-							baselineX,
-							baselineY,
-							Math.max(0.3, 0.00025 * D),
-							"sprint",
-						);
+						snapPlayer(inbounder, baselineX, baselineY);
 						if (receiver !== undefined) {
 							moveTo(
 								receiver,
@@ -2078,7 +1979,8 @@
 						if (p && window.__INB) {
 							window.__INB.actualX = +p.x.toFixed(1);
 							window.__INB.actualY = +p.y.toFixed(1);
-							window.__INB.onApron = p.x > 94 || p.x < 0 || p.y > 50 || p.y < 0;
+							window.__INB.onApron =
+								p.x > 94 || p.x < 0 || p.y > 50 || p.y < 0;
 						}
 					}, 0.4 * D),
 				);
@@ -2329,350 +2231,6 @@
 				return targets;
 			}
 
-			// ── OFFLINE FULL-GAME CHOREOGRAPHER ─────────────────────────────────────────
-			// BBGM sims the ENTIRE game before the first frame renders — packet.events
-			// holds every play up front. So instead of the reactive planner deciding
-			// off-ball motion 1-2 events ahead (which piled players through center on every
-			// transition and rolled a fresh random play each possession), we walk the whole
-			// event list ONCE with global knowledge and precompute the 10-player half-court
-			// formation for every possession. Two things global knowledge buys us:
-			//   1. LANE-PRESERVING TRANSITIONS — we know each possession's from-end and
-			//      to-end, so a player crossing the floor first slides across in X along
-			//      their OWN Y-lane, then settles Y. Ten players run in parallel lanes
-			//      instead of funneling diagonally through midcourt (the "center knot").
-			//   2. STABLE, ANTI-OVERLAPPED SPREAD — the offense play/variant is rolled once
-			//      per possession in the walk (not re-randomized live), and a global
-			//      min-spacing pass guarantees no two dots share a spot.
-			// The result is stored on each event as ev.__choreoTargets = { pid: {x,y,
-			// urgency, via?} } and consumed by planMotion(next) → setupNextInterval, which
-			// applies it through the normal moveTo keyframe machinery. Crucially this leaves
-			// the ball / shooter / inbound / free-throw logic in handleEvent untouched — they
-			// keep driving the on-ball action; the choreographer only owns the other nine.
-			const CHOREO_ENABLED = true;
-			const CHOREO_SPREAD = 16; // min ft between offensive players (wider = airier)
-			const TRANSITION_X = 25; // Δx (ft) beyond which a move gets a lane waypoint
-
-			// Period-parameterized court helpers. The live attackRimX/etc. read the
-			// currentPeriod global; the offline walk spans every period, so it must pass the
-			// period explicitly (sides swap at Q3 and stay swapped through OT).
-			const swappedP = (p) => p >= 3;
-			const attackRimXP = (t, p) => (swappedP(p) ? RIM_X[1 - t] : RIM_X[t]);
-			const attackDirP = (t, p) => (attackRimXP(t, p) > 47 ? -1 : 1);
-			const attackBaselineXP = (t, p) => (attackRimXP(t, p) > 47 ? 94 : 0);
-
-			// Pure form of offensiveRoleSpot: explicit play/variant/period, no globals.
-			function offSpotP(t, role, play, setIdx, period) {
-				const pb = PLAY_PLAYBOOK[play] ?? PLAY_PLAYBOOK.set;
-				const spots = pb[role] ?? PLAY_PLAYBOOK.set[role] ?? [[16, 25]];
-				const [dx, dy] = spots[setIdx % spots.length];
-				return attackBaselineXP(t, period) === 94 ? [94 - dx, dy] : [dx, dy];
-			}
-			// Pure form of ftRoleSpot.
-			function ftSpotP(t, role, isOffense, period) {
-				const table = isOffense ? FT_SPOTS_OFF : FT_SPOTS_DEF;
-				const [dx, dy] = table[role] ?? table.SF;
-				return attackBaselineXP(t, period) === 94 ? [94 - dx, dy] : [dx, dy];
-			}
-
-			// Hand out the 5 DISTINCT role slots to an explicit on-court five (guard→center
-			// axis), the offline twin of assignRolesForTeam.
-			function assignRolesW(pids, roster) {
-				const byPid = new Map((roster ?? []).map((p) => [p.pid, p]));
-				const ranked = pids
-					.map((pid) => ({
-						pid,
-						rank: POS_RANK[byPid.get(pid)?.pos ?? ""] ?? 4,
-					}))
-					.sort((a, b) => a.rank - b.rank);
-				const out = {};
-				ranked.forEach((r, i) => (out[r.pid] = ROLE_SLOTS[Math.min(i, 4)]));
-				return out;
-			}
-
-			// Offline twin of buildMatchups — offensive pid → defensive pid, from explicit
-			// rosters/roles.
-			function buildMatchupsW(offT, defT, onCourtW, roleW) {
-				const offByRole = {};
-				for (const pid of onCourtW[offT]) {
-					const r = roleW[pid] ?? "SF";
-					(offByRole[r] ??= []).push(pid);
-				}
-				const m = {};
-				const usedD = new Set();
-				for (const dpid of onCourtW[defT]) {
-					const r = roleW[dpid] ?? "SF";
-					const c = offByRole[r];
-					if (c && c.length) {
-						const opid = c.shift();
-						m[opid] = dpid;
-						usedD.add(dpid);
-					}
-				}
-				const uo = onCourtW[offT].filter((o) => !(o in m));
-				const ud = onCourtW[defT].filter((d) => !usedD.has(d));
-				const pr = (pid) => ROLE_PRIORITY[roleW[pid]] ?? 5;
-				uo.sort((a, b) => pr(a) - pr(b));
-				ud.sort((a, b) => pr(a) - pr(b));
-				for (let i = 0; i < Math.min(uo.length, ud.length); i++)
-					m[uo[i]] = ud[i];
-				return m;
-			}
-
-			// Build the full 10-player half-court formation for one possession, purely from
-			// explicit state — the offline twin of buildRoleTargets. Offense at wide role
-			// spots; defense man→rim with helpside; global min-spacing so nobody stacks.
-			function buildFormationW(
-				offT,
-				defT,
-				onCourtW,
-				roleW,
-				play,
-				set,
-				period,
-				ballPid,
-				mode,
-			) {
-				const targets = {};
-				const offXY = {};
-				const isFt = mode === "ft";
-				for (const pid of onCourtW[offT]) {
-					const role = roleW[pid] ?? "SF";
-					const [x, y] = isFt
-						? ftSpotP(offT, role, true, period)
-						: offSpotP(offT, role, play, set[role] ?? 0, period);
-					offXY[pid] = [x, y];
-					targets[pid] = { x, y, urgency: "sprint" };
-				}
-				if (!isFt) {
-					enforceMinSpacing(targets, onCourtW[offT], CHOREO_SPREAD);
-					// Keep the airier spacing inside the playing surface — the push above can
-					// otherwise shove a wing past the baseline or a big across half-court.
-					for (const pid of onCourtW[offT]) {
-						targets[pid].x = clamp(targets[pid].x, 3, 91);
-						targets[pid].y = clamp(targets[pid].y, 3, 47);
-						offXY[pid] = [targets[pid].x, targets[pid].y];
-					}
-				}
-
-				const matchups = buildMatchupsW(offT, defT, onCourtW, roleW);
-				if (isFt) {
-					for (const pid of onCourtW[defT]) {
-						const role = roleW[pid] ?? "SF";
-						const [x, y] = ftSpotP(offT, role, false, period);
-						targets[pid] = { x, y, urgency: "walk" };
-					}
-					return targets;
-				}
-				const myRim = attackRimXP(offT, period); // the rim the defense protects
-				const myRimY = 25;
-				let ballX = null,
-					ballY = null;
-				if (ballPid != null && offXY[ballPid]) [ballX, ballY] = offXY[ballPid];
-				for (const opid of Object.keys(matchups)) {
-					const dpid = matchups[opid];
-					const xy = offXY[opid];
-					if (!xy) continue;
-					const [manX, manY] = xy;
-					const isOnBall = Number(opid) === ballPid;
-					const ballDist =
-						ballX !== null ? Math.hypot(manX - ballX, manY - ballY) : 0;
-					const isWeak = Math.abs(manY - 25) > 16 && ballDist > 30;
-					const dxRim = myRim - manX,
-						dyRim = myRimY - manY;
-					const dl = Math.hypot(dxRim, dyRim) || 1;
-					const ux = dxRim / dl,
-						uy = dyRim / dl;
-					const help = isOnBall ? 3 : isWeak ? 9 : 6;
-					const helpY = isWeak ? (manY > 25 ? -2 : 2) : 0;
-					let tx = manX + ux * help,
-						ty = manY + uy * help + helpY;
-					const dm = Math.hypot(tx - manX, ty - manY);
-					if (dm > 8) {
-						const k = 8 / dm;
-						tx = manX + (tx - manX) * k;
-						ty = manY + (ty - manY) * k;
-					}
-					targets[dpid] = {
-						x: clamp(tx, 1, 93),
-						y: clamp(ty, 1, 49),
-						urgency: "sprint",
-					};
-				}
-				// Any defender left unmatched (sub mismatch) — park at their mirrored spot.
-				for (const pid of onCourtW[defT]) {
-					if (targets[pid]) continue;
-					const role = roleW[pid] ?? "SF";
-					const [x, y] = offSpotP(defT, role, "set", 0, period);
-					targets[pid] = { x, y, urgency: "sprint" };
-				}
-				// Global 10-player anti-overlap; guarded (man/defender) pairs are exempt.
-				const all = [...onCourtW[offT], ...onCourtW[defT]];
-				const skip = new Set();
-				for (const o of Object.keys(matchups)) {
-					const d = matchups[o];
-					skip.add(Math.min(o, d) + "|" + Math.max(o, d));
-				}
-				enforceMinSpacing(targets, all, 4, skip);
-				return targets;
-			}
-
-			// Offline twin of updatePossession — returns the offensive team AFTER `ev`.
-			function nextPossW(ev, next, poss) {
-				if (typeof ev.t !== "number") return poss;
-				if (
-					FGA_TYPES.has(ev.type) ||
-					ev.type === "drb" ||
-					ev.type === "orb" ||
-					ev.type === "stl"
-				)
-					return ev.t;
-				if (ev.type === "ft" || ev.type === "missFt") {
-					const moreFt =
-						next &&
-						(next.type === "ft" || next.type === "missFt") &&
-						next.t === ev.t;
-					if (ev.type === "ft" && !moreFt) return ev.t === 0 ? 1 : 0;
-					return ev.t;
-				}
-				if (
-					/^(fg|tp)[A-Z]?/.test(ev.type) &&
-					!ev.type.startsWith("fga") &&
-					!ev.type.endsWith("AndOne")
-				)
-					return ev.t === 0 ? 1 : 0;
-				if (
-					ev.type === "tov" ||
-					ev.type === "outOfBounds" ||
-					ev.type === "pfFG" ||
-					ev.type === "pfTP" ||
-					ev.type === "pfBonus" ||
-					ev.type === "pfNonShooting"
-				)
-					return ev.t === 0 ? 1 : 0;
-				return poss;
-			}
-
-			// Roll a play type + per-role variant (offline; self-consistent for the walk).
-			function rollPlayW() {
-				const play = PLAY_TYPES[Math.floor(Math.random() * PLAY_TYPES.length)];
-				const set = {};
-				for (const role of ROLE_SLOTS) {
-					const spots = PLAY_PLAYBOOK[play]?.[role] ?? [[0, 25]];
-					set[role] = Math.floor(Math.random() * spots.length);
-				}
-				return { play, set };
-			}
-
-			// THE offline pass. Walk every event once, tracking period / possession /
-			// on-court fives / roles / play, and stamp each event with the off-ball
-			// formation to be IN when that event fires (ev.__choreoTargets), adding a
-			// lane-preserving `via` waypoint to anyone who has to cross the floor.
-			function buildGameChoreography(events) {
-				if (!CHOREO_ENABLED || !Array.isArray(events) || !events.length) return;
-				const rosters = [teams?.[0]?.players ?? [], teams?.[1]?.players ?? []];
-				const onCourtW = [[...(onCourt[0] ?? [])], [...(onCourt[1] ?? [])]];
-				let roleW = {
-					...assignRolesW(onCourtW[0], rosters[0]),
-					...assignRolesW(onCourtW[1], rosters[1]),
-				};
-				let period = 1;
-				// Opening possession = the team that takes the first shot (matches the tip).
-				let poss = 0;
-				for (const e of events) {
-					if (FGA_TYPES.has(e?.type) && typeof e.t === "number") {
-						poss = e.t;
-						break;
-					}
-				}
-				let { play, set } = rollPlayW();
-				// Previous formation target per pid (for lane-preserving transitions). Seed
-				// from wherever the dots physically spawned so the first leg starts clean.
-				const prevXY = {};
-				for (const t of [0, 1])
-					for (const pid of onCourtW[t]) {
-						const pl = players[pid];
-						if (pl) prevXY[pid] = [pl.x, pl.y];
-					}
-
-				for (let i = 0; i < events.length; i++) {
-					const ev = events[i];
-					// Period boundary — mirror handleEvent's period/overtime cases.
-					if (
-						(ev.type === "period" || ev.type === "overtime") &&
-						typeof ev.period === "number"
-					)
-						period = ev.period;
-					else if (typeof ev.period === "number") period = ev.period;
-					// Substitution — mirror the sub handler's roster swap.
-					if (
-						ev.type === "sub" &&
-						typeof ev.t === "number" &&
-						Array.isArray(ev.pidsOff) &&
-						Array.isArray(ev.pids)
-					) {
-						const t = ev.t;
-						for (let k = 0; k < ev.pidsOff.length; k++) {
-							const idx = onCourtW[t].indexOf(ev.pidsOff[k]);
-							if (idx !== -1) onCourtW[t][idx] = ev.pids[k];
-						}
-						roleW = { ...roleW, ...assignRolesW(onCourtW[t], rosters[t]) };
-						continue;
-					}
-					// Advance possession as this event resolves; a change re-rolls the play,
-					// exactly like updatePossession → maybeRoll at playback.
-					const before = poss;
-					poss = nextPossW(ev, events[i + 1], poss);
-					if (poss !== before) ({ play, set } = rollPlayW());
-
-					// Now stamp the NEXT event with the formation the off-ball nine should be
-					// reforming into during the gap before it fires (planMotion(next) reads it).
-					const next = events[i + 1];
-					if (!next) break;
-					if (
-						next.type === "sub" ||
-						next.type === "period" ||
-						next.type === "overtime"
-					)
-						continue;
-					// Offensive team finishing `next` — identical to planMotion's offT.
-					const offT =
-						FGA_TYPES.has(next.type) ||
-						next.type === "ft" ||
-						next.type === "missFt" ||
-						next.type === "tov"
-							? next.t
-							: poss;
-					if (offT !== 0 && offT !== 1) continue;
-					const defT = offT === 0 ? 1 : 0;
-					const mode =
-						next.type === "ft" || next.type === "missFt" ? "ft" : "set";
-					const ballPid = typeof next.pid === "number" ? next.pid : null;
-					const targets = buildFormationW(
-						offT,
-						defT,
-						onCourtW,
-						roleW,
-						play,
-						set,
-						period,
-						ballPid,
-						mode,
-					);
-					// Attach lane-preserving `via` waypoints and record for the next diff.
-					for (const pid of Object.keys(targets)) {
-						const tg = targets[pid];
-						const prev = prevXY[pid];
-						if (prev && Math.abs(tg.x - prev[0]) > TRANSITION_X) {
-							// Slide across in X first, holding the player's current Y lane, then
-							// settle Y — so ten crossing players stay in parallel lanes.
-							tg.via = [tg.x, prev[1]];
-						}
-						prevXY[pid] = [tg.x, tg.y];
-					}
-					next.__choreoTargets = targets;
-				}
-			}
-
 			// True iff this event is a made FG/3pt (not an attempt).
 			function isMakeEvent(ev) {
 				return (
@@ -2707,14 +2265,7 @@
 				const mode =
 					next.type === "ft" || next.type === "missFt" ? "ft" : "set";
 
-				// Off-ball formation: prefer the offline choreographer's globally-aware,
-				// lane-transitioned, anti-overlapped targets stamped on this event; fall back
-				// to the reactive builder only if the pass didn't cover it. Clone so the
-				// per-player refinements below (shooter/assister/rebounder) don't mutate the
-				// stored plan (replanCurrentGap may read it again).
-				const targets = next.__choreoTargets
-					? cloneTargets(next.__choreoTargets)
-					: buildRoleTargets(offT, defT, mode);
+				const targets = buildRoleTargets(offT, defT, mode);
 				let ballCarrier = null;
 				let ballArc = null;
 
@@ -2819,30 +2370,9 @@
 
 				const movers = [];
 				for (const [pid, t] of Object.entries(targets)) {
-					movers.push({
-						pid: Number(pid),
-						x: t.x,
-						y: t.y,
-						urgency: t.urgency,
-						via: t.via,
-					});
+					movers.push({ pid: Number(pid), x: t.x, y: t.y, urgency: t.urgency });
 				}
 				return { movers, ballCarrier, ballArc };
-			}
-
-			// Shallow-clone a {pid:{x,y,urgency,via}} target map (via array copied too).
-			function cloneTargets(src) {
-				const out = {};
-				for (const pid in src) {
-					const t = src[pid];
-					out[pid] = {
-						x: t.x,
-						y: t.y,
-						urgency: t.urgency,
-						via: t.via ? [t.via[0], t.via[1]] : undefined,
-					};
-				}
-				return out;
 			}
 
 			// ── Inter-event pacing context (so scheduleInbound's deferred callback can
@@ -2893,11 +2423,7 @@
 				// Who ends the possession, if we know: the shooter, or the giveaway man on a
 				// turnover. Otherwise the ball just circulates and dies with the PG.
 				let ender = null;
-				if (
-					isFgaEvent(next) &&
-					players[next.pid] &&
-					players[next.pid].t === offT
-				) {
+				if (isFgaEvent(next) && players[next.pid] && players[next.pid].t === offT) {
 					ender = next.pid;
 				} else if (
 					next.type === "tov" &&
@@ -3006,60 +2532,26 @@
 				return true;
 			}
 
-			// On-screen locomotion is a CONSTANT cruise speed, NOT tied to the per-event gap.
-			// Tying duration to the gap made speed lurch — long gaps crept, short/clustered
-			// gaps bolted (the "slow, then guys bolt across the court, then slow" hiccup).
-			// Instead cruise = CRUISE_K · effRate (game-sec shown per real-sec): the same speed
-			// on every move, still pace-linked (lowest sim speed → genuine crawl), and — since a
-			// possession's real duration is possGameSec/effRate — the distance covered per
-			// possession = cruise·time = CRUISE_K·possGameSec is INDEPENDENT of pace, so players
-			// still cover a full transition each trip regardless of speed. A move that outlasts
-			// the gap simply keeps gliding and the next event re-targets it mid-flight (moveTo
-			// anchors the current sampled position first → no jump).
-			const CRUISE_K = 4.0; // on-screen ft/s per unit effRate
-			const MIN_FPS = 1.5; // floor so an ultra-slow sim still drifts perceptibly
-			const MAX_FPS = 20; // ceiling so a fast sim never teleports
-			// Apply one choreographer mover: glide current → (via) → final at cruise speed. The
-			// via holds the player's Y-lane so ten crossers stay in parallel lanes; legs split
-			// PROPORTIONALLY to distance so speed is uniform across the whole path.
-			function applyMover(m) {
-				if (reformExclude.has(m.pid)) return;
-				const pl = players[m.pid];
-				if (!pl) return;
-				const pts = m.via ? [m.via, [m.x, m.y]] : [[m.x, m.y]];
-				let px = pl.x,
-					py = pl.y,
-					L = 0;
-				const seg = [];
-				for (const [lx, ly] of pts) {
-					const d = Math.hypot(lx - px, ly - py);
-					seg.push(d);
-					L += d;
-					px = lx;
-					py = ly;
-				}
-				if (L < 0.01) return;
-				const cruise = clamp(CRUISE_K * gameRate * speed, MIN_FPS, MAX_FPS);
-				const total = Math.max(MIN_DUR, L / cruise);
-				let cum = 0;
-				for (let k = 0; k < pts.length; k++) {
-					cum += seg[k];
-					moveTo(
-						m.pid,
-						pts[k][0],
-						pts[k][1],
-						Math.max(MIN_DUR, total * (cum / L)),
-						m.urgency,
-					);
-				}
-			}
-
 			function setupNextInterval(next, next2, gap, gapGame) {
 				if (!next) return;
 				const plan = planMotion(next, next2, gap);
 
-				// Glide every mover into place at a constant cruise speed (see applyMover).
-				for (const m of plan.movers) applyMover(m);
+				// Use the full gap as the tween duration — players move the entire interval,
+				// velocity-clamped, instead of snapping in fractions of it.
+				for (const m of plan.movers) {
+					if (reformExclude.has(m.pid)) continue;
+					// Players with a long way to travel (transition — especially defenders
+					// getting back on defense) HUSTLE into position and arrive early, then
+					// hold — instead of ambling the target across the whole (possibly long)
+					// gap at distance/gap speed, which looked like nobody sprinting back.
+					const pl = players[m.pid];
+					let dur = gap;
+					if (pl) {
+						const dist = Math.hypot(m.x - pl.x, m.y - pl.y);
+						if (dist > 16) dur = Math.min(gap, dist / 17); // ~17 ft/s hustle
+					}
+					moveTo(m.pid, m.x, m.y, dur, m.urgency);
+				}
 				// A swing supersedes the planner's single ball assignment / assist arc.
 				// While an inbound owns the ball, defer the swing to the inbound's end-beat
 				// (replanCurrentGap) so they don't both drive ball.carrier at once.
@@ -3098,7 +2590,20 @@
 					upNext2 = eventQueue[1];
 				if (!upNext) return;
 				const plan = planMotion(upNext, upNext2, remaining);
-				for (const m of plan.movers) applyMover(m);
+				for (const m of plan.movers) {
+					if (reformExclude.has(m.pid)) continue;
+					// Players with a long way to travel (transition — especially defenders
+					// getting back on defense) HUSTLE into position and arrive early, then
+					// hold — instead of ambling the target across the whole (possibly long)
+					// gap at distance/gap speed, which looked like nobody sprinting back.
+					const pl = players[m.pid];
+					let dur = remaining;
+					if (pl) {
+						const dist = Math.hypot(m.x - pl.x, m.y - pl.y);
+						if (dist > 16) dur = Math.min(remaining, dist / 17); // ~17 ft/s hustle
+					}
+					moveTo(m.pid, m.x, m.y, dur, m.urgency);
+				}
 				if (maybeBallSwing(upNext, remaining, remainingGame)) return;
 				if (plan.ballCarrier !== null && players[plan.ballCarrier]) {
 					ball.carrier = plan.ballCarrier;
@@ -3577,83 +3082,7 @@
 			let nextEarliestMs = 0;
 			let drainTimer = null;
 
-			// ── Timeline playhead + event pump (replaces the setTimeout gap drain) ──────
-			// Advance the smooth game-clock playhead each frame and fire every event it has
-			// reached. Events feed the keyframe tracks (via setupNextInterval → moveTo), and
-			// players/ball are sampled from those tracks — so pacing is one steady playhead,
-			// not a chain of variable setTimeouts, killing the old speed-pulse jitter.
-			function advanceTimeline(dt) {
-				if (playhead === null) {
-					const first = eventQueue.find((e) => typeof e.clock === "number");
-					if (!first) return;
-					playhead = first.clock;
-					playheadPeriod = currentPeriod;
-				}
-				const eff = Math.max(0.2, gameRate * speed);
-				playhead -= dt * eff;
-				// Track BBGM's live (tick-extrapolated) clock when running near real-time so we
-				// never drift out of sync; below ~0.9× we intentionally let the playhead lag —
-				// that lag IS the slow-motion the user asked for.
-				if (
-					speed >= 0.9 &&
-					bbgmClock !== null &&
-					currentPeriod === bbgmPeriod &&
-					lastTick
-				) {
-					const sinceTick = (performance.now() - lastTick.recvMs) / 1000;
-					const estBbgm = bbgmClock - gameRate * sinceTick;
-					playhead += (estBbgm - playhead) * Math.min(1, dt * 2);
-				}
-				pumpEvents();
-			}
-			function pumpEvents() {
-				let guard = 0;
-				while (eventQueue.length && guard++ < 300) {
-					const head = eventQueue[0];
-					const hasClock = typeof head.clock === "number";
-					// A big upward clock jump = new quarter/OT: snap the playhead to it and
-					// re-anchor every track to its current spot so nobody splines across the
-					// period break.
-					if (hasClock && playhead !== null && head.clock > playhead + 20) {
-						playhead = head.clock;
-						playheadPeriod = head.period ?? playheadPeriod;
-						for (const pid in players) {
-							if (players[pid].onCourt)
-								resetTrack(players[pid], players[pid].x, players[pid].y);
-						}
-					}
-					// Fire clockless events (subs, timeouts) immediately; timed events when the
-					// playhead has descended to their clock.
-					if (hasClock && playhead > head.clock) break;
-					const ev = eventQueue.shift();
-					const next = eventQueue[0];
-					const next2 = eventQueue[1];
-					handleEvent(ev);
-					updatePossession(ev, next);
-					let deltaGame = 0;
-					if (
-						next &&
-						typeof ev.clock === "number" &&
-						typeof next.clock === "number" &&
-						next.clock <= ev.clock
-					) {
-						deltaGame = ev.clock - next.clock;
-					}
-					const eff = Math.max(0.2, gameRate * speed);
-					const gapRealSec = Math.max(0.1, deltaGame / eff);
-					pacingCtx = {
-						prev: ev,
-						gapStartedAt: performance.now(),
-						gap: gapRealSec,
-						gapGame: deltaGame,
-					};
-					setupNextInterval(next, next2, gapRealSec, deltaGame);
-				}
-			}
-			// The playhead pump is the sole drainer now; keep this a no-op so the existing
-			// callers (gameStart / resume / applyControl) are harmless.
-			function scheduleDrain() {}
-			function scheduleDrain_OLD() {
+			function scheduleDrain() {
 				if (drainTimer !== null) return;
 				if (paused) return; // resumeSim() re-arms the drain
 				if (eventQueue.length === 0) return;
@@ -3698,10 +3127,7 @@
 					// has deliberately dialed the speed below ~0.9× to study the motion, DON'T
 					// race to stay in lockstep — that's what kept "slowest" feeling too fast.
 					if (lag > CATCHUP_THRESH && speed >= 0.9) {
-						gapRealSec = Math.max(
-							0.06,
-							GAP_FLOOR - (lag - CATCHUP_THRESH) * 0.02,
-						);
+						gapRealSec = Math.max(0.06, GAP_FLOOR - (lag - CATCHUP_THRESH) * 0.02);
 					} else if (
 						bbgmClock !== null &&
 						lastTick &&
@@ -3770,10 +3196,7 @@
 				if (drainTimer !== null) {
 					clearTimeout(drainTimer);
 					drainTimer = null;
-					pausePerfRemainingMs = Math.max(
-						0,
-						nextEarliestMs - performance.now(),
-					);
+					pausePerfRemainingMs = Math.max(0, nextEarliestMs - performance.now());
 				}
 				setConn("idle", "paused");
 			}
@@ -3859,8 +3282,6 @@
 				paused,
 				gameRate: +gameRate.toFixed(2),
 				paceScale: +paceScale().toFixed(2),
-				playhead: playhead !== null ? +playhead.toFixed(1) : null,
-				queueLen0: eventQueue.length,
 				lastInst,
 				bbgmClock,
 				speed,
@@ -3906,31 +3327,37 @@
 				const dt = ticker.deltaMS / 1000;
 				now += dt;
 
-				// Advance the timeline playhead and fire any events it has reached.
-				advanceTimeline(dt);
-
-				// Sample every on-court player from their keyframe track at the playhead. The
-				// Catmull-Rom spline carries them THROUGH waypoints without the old stop-at-
-				// every-target stutter. When a player has no waypoint ahead (sitting on their
-				// last keyframe) a whisper of drift keeps them from looking frozen.
+				// Continuous steering: every on-court player eases toward their target with a
+				// smooth velocity, decelerating into an arrival radius. A re-target bends the
+				// path instead of stopping it — this is what makes the motion flow instead of
+				// the old stop-at-every-waypoint tweens.
+				const steerK = 1 - Math.exp(-STEER_K * dt); // frame-rate-independent smoothing
 				for (const pid in players) {
 					const pl = players[pid];
 					if (!pl.onCourt) continue;
-					if (playhead !== null && pl.kf && pl.kf.length) {
-						pruneTrack(pl.kf);
-						const s = sampleTrack(pl.kf, playhead);
-						if (s) {
-							// Instantaneous velocity (ft/s) for the ball's dribble hand + tempo.
-							pl.vx = (s.x - pl.x) / Math.max(dt, 1e-3);
-							pl.vy = (s.y - pl.y) / Math.max(dt, 1e-3);
-							pl.x = s.x;
-							pl.y = s.y;
-						}
-						if (playhead <= pl.kf[pl.kf.length - 1].c + 0.02) {
-							driftSeeds[pid] += dt * 0.5;
-							pl.x += Math.cos(driftSeeds[pid]) * 0.08 * dt;
-							pl.y += Math.sin(driftSeeds[pid] * 1.3) * 0.07 * dt;
-						}
+					const dx = pl.tx - pl.x,
+						dy = pl.ty - pl.y;
+					const dist = Math.hypot(dx, dy);
+					let dvx = 0,
+						dvy = 0;
+					if (dist > 0.05) {
+						const desired =
+							dist < ARRIVE_RADIUS
+								? pl.maxSpeed * (dist / ARRIVE_RADIUS)
+								: pl.maxSpeed;
+						dvx = (dx / dist) * desired;
+						dvy = (dy / dist) * desired;
+					}
+					pl.vx += (dvx - pl.vx) * steerK;
+					pl.vy += (dvy - pl.vy) * steerK;
+					pl.x += pl.vx * dt;
+					pl.y += pl.vy * dt;
+					// Idle jockey: once essentially arrived, add a slow drift so nobody stands
+					// frozen — steering gently pulls them back, so it reads as live footwork.
+					if (Math.hypot(pl.vx, pl.vy) < 0.7) {
+						driftSeeds[pid] += dt * 0.5;
+						pl.x += Math.cos(driftSeeds[pid]) * 0.08 * dt;
+						pl.y += Math.sin(driftSeeds[pid] * 1.3) * 0.07 * dt;
 					}
 					pl.gfx.position.set(pl.x, pl.y);
 				}

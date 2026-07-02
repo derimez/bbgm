@@ -1,4 +1,8 @@
 import { toWorker } from "./toWorker.ts";
+import { pushNow, deleteFromServer, shareSnapshot } from "./bbgmSync.ts";
+import { logEvent } from "./logEvent.ts";
+import { confirm } from "./confirm.tsx";
+import { hardRefresh } from "./hardRefresh.ts";
 import {
 	DAILY_SCHEDULE,
 	DEPTH_CHART_NAME,
@@ -657,6 +661,96 @@ export const menuItems: (MenuItemLink | MenuItemHeader)[] = [
 		nonLeague: true,
 		commandPalette: true,
 		children: [
+			{
+				type: "link",
+				league: true,
+				commandPalette: true,
+
+				async onClick() {
+					// Opens the iOS share sheet with the .json.gz attached (the share
+					// sheet itself is the feedback, so no toast on success).
+					const result = shareSnapshot();
+					if (!result.ok) {
+						await logEvent({
+							type: result.needsPrepare ? "info" : "error",
+							text: result.needsPrepare
+								? "Preparing snapshot… tap Export Snapshot again in a moment"
+								: result.error,
+							saveToDb: false,
+							persistent: !result.needsPrepare,
+						});
+					}
+				},
+
+				text: "Export Snapshot 📤",
+			},
+			{
+				type: "link",
+				league: true,
+				commandPalette: true,
+
+				async onClick() {
+					const result = await pushNow();
+					if (result.ok) {
+						await logEvent({
+							type: "success",
+							text: "League synced to server ⬆",
+							saveToDb: false,
+						});
+					} else {
+						await logEvent({
+							type: "error",
+							text: `Sync failed: ${result.error}`,
+							saveToDb: false,
+							persistent: true,
+						});
+					}
+				},
+
+				text: "Sync ⬆ to Server",
+			},
+			{
+				type: "link",
+				league: true,
+				commandPalette: true,
+
+				async onClick() {
+					const ok = await confirm(
+						"Delete this league's copy from the sync server? Your local league is NOT touched — delete it locally afterward if you want it gone entirely.",
+						{ okText: "Delete from Server", cancelText: "Cancel" },
+					);
+					if (!ok) return;
+					const result = await deleteFromServer();
+					if (result.ok) {
+						await logEvent({
+							type: "success",
+							text: "Deleted from server 🗑",
+							saveToDb: false,
+						});
+					} else {
+						await logEvent({
+							type: "error",
+							text: `Delete failed: ${result.error}`,
+							saveToDb: false,
+							persistent: true,
+						});
+					}
+				},
+
+				text: "Delete from Server",
+			},
+			{
+				type: "link",
+				league: true,
+				nonLeague: true,
+				commandPalette: true,
+
+				async onClick() {
+					await hardRefresh();
+				},
+
+				text: "Empty Cache & Hard Reload",
+			},
 			{
 				type: "link",
 				active: (pageID) => pageID === "achievements",

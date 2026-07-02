@@ -7,6 +7,7 @@ import * as util from "./util/index.ts";
 import * as random from "../common/random.ts";
 import { promiseWorker } from "./util/promiseWorker.ts";
 import { defaultGameAttributes } from "../common/defaultGameAttributes.ts";
+import seedRealOverrides from "./core/league/seedRealOverrides.ts";
 
 self.bbgm = {
 	...common,
@@ -51,4 +52,10 @@ export type WorkerAPICategory =
 		// @ts-expect-error
 		return api[type][name](param, conditions);
 	});
+
+	// Seed real NBA team info + player photos into the meta store on boot so real
+	// teams/logos/faces are the default in the New League wizard, Exhibition, and
+	// league generation. Fire-and-forget: consumers also await this (memoized), so
+	// there's no first-load race, and any failure is swallowed inside.
+	void seedRealOverrides();
 })();

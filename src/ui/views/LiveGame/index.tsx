@@ -45,7 +45,11 @@ import { getPeriodName } from "../../../common/getPeriodName.ts";
 // elements — and Add-to-Home-Screen PWAs there have no API at all.
 const SimcastPanel = () => {
 	const wrapRef = useRef<HTMLDivElement | null>(null);
-	const [collapsed, setCollapsed] = useState(false);
+	// Collapsed (hidden) by default, and the choice persists — so it stays
+	// hidden across live games instead of needing to be collapsed every time.
+	const [collapsed, setCollapsed] = useLocalStorageState("simcastCollapsed", {
+		defaultValue: true,
+	});
 	const [fakeFs, setFakeFs] = useState(false);
 
 	const toggleFullscreen = useCallback(() => {
@@ -373,6 +377,39 @@ const speedToMs = (speed: number) => {
 	return 4000 / 1.2 ** speed;
 };
 
+// ── Simcast playback sync (basketball only) ──────────────────────────────────
+// The live court view at /simcast is a rendering slave to THIS playback loop.
+// We POST a lightweight control frame to the local sync server on every play
+// advance (carrying the current game clock) and on pause/play, so the simcast
+// derives its speed from our cadence and freezes when we pause. Fire-and-forget:
+// no simcast open → the broadcast fans out to nobody, harmless.
+const emitSimControl = (payload: Record<string, unknown>) => {
+	if (typeof fetch === "undefined" || !isSport("basketball")) {
+		return;
+	}
+	try {
+		fetch("/api/sim-control", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(payload),
+			keepalive: true,
+		}).catch(() => {});
+	} catch {}
+};
+
+// Throttle per-advance clock ticks — fast-forward calls processToNextPause in a
+// tight loop, but ~13 ticks/sec is plenty for the simcast to track pace. A final
+// gameOver tick always goes through.
+let lastSimTickMs = 0;
+const emitSimTick = (gameClock: number, gameOver: boolean, period: number) => {
+	const t = typeof performance !== "undefined" ? performance.now() : Date.now();
+	if (!gameOver && t - lastSimTickMs < 75) {
+		return;
+	}
+	lastSimTickMs = t;
+	emitSimControl({ gameClock, gameOver, period });
+};
+
 const getNavigateWarning = (exhibition: boolean | undefined) => {
 	return exhibition
 		? "If you navigate away from this page, you won't be able to see this box score again."
@@ -598,6 +635,13 @@ export const LiveGame = (props: View<"liveGame">) => {
 
 			const endSeconds = getSeconds(boxScore.current.time);
 
+			// Heartbeat to the simcast: current game clock, period, and end-of-game flag.
+			emitSimTick(
+				endSeconds,
+				!!boxScore.current.gameOver,
+				Math.max(1, quarters.current.length),
+			);
+
 			// This is negative when rolling over to a new quarter
 			const elapsedSeconds = startSeconds - endSeconds;
 			return elapsedSeconds;
@@ -642,10 +686,12 @@ export const LiveGame = (props: View<"liveGame">) => {
 	const handlePause = useCallback(() => {
 		setPaused(true);
 		pausedRef.current = true;
+		emitSimControl({ paused: true });
 	}, []);
 
 	const handlePlay = useCallback(() => {
 		setPaused(false);
+		emitSimControl({ paused: false });
 
 		// Without pausedRef check, this was a race condition and could lead to incorrect post-game records (counting as 2 or more wins)
 		if (pausedRef.current) {

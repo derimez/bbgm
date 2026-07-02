@@ -24,6 +24,7 @@ import { choice } from "../../common/random.ts";
 import { getTeamColors } from "../util/getTeamColors.ts";
 import { getTeamInfoBySeason } from "../util/getTeamInfoBySeason.ts";
 import { processPlayersHallOfFame } from "../util/processPlayersHallOfFame.ts";
+import { getPlayerAnalytics } from "./getPlayerAnalytics.ts";
 
 export const getPlayerProfileStats = () => {
 	const stats = [];
@@ -579,8 +580,11 @@ const updatePlayer = async (
 
 		const leaders = await player.getLeaders(topStuff.pRaw);
 
+		const analytics = await getPlayerAnalytics(p);
+
 		return {
 			...topStuff,
+			analytics,
 			events,
 			feats,
 			leaders,

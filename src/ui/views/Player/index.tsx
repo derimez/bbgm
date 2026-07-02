@@ -17,8 +17,10 @@ import { InjuryIcon } from "../../components/InjuryIcon.tsx";
 import { SkillsBlock } from "../../components/SkillsBlock.tsx";
 import { SafeHtml } from "../../components/SafeHtml.tsx";
 import { useLocal } from "../../util/local.ts";
+import Analytics from "./Analytics/index.tsx";
 
 const Player2 = ({
+	analytics,
 	bestPos,
 	customMenu,
 	events,
@@ -111,6 +113,12 @@ const Player2 = ({
 					leaders={leaders}
 				/>
 			))}
+
+			{player.stats.some((row: any) => !row.playoffs && row.gp > 0) ? (
+				<HideableSection title="Analytics">
+					<Analytics player={player} analytics={analytics} />
+				</HideableSection>
+			) : null}
 
 			<HideableSection
 				title="Ratings"

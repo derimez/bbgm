@@ -4,6 +4,7 @@ import { type Context, makeRegex, router } from "../router/index.ts";
 import { local, localActions } from "./local.ts";
 import { realtimeUpdate } from "./realtimeUpdate.ts";
 import { toWorker } from "./toWorker.ts";
+import { checkAndPullOnLoad } from "./bbgmSync.ts";
 import { create } from "zustand";
 import { routeInfos } from "./routeInfos.ts";
 
@@ -287,6 +288,13 @@ class ViewManager {
 			actions.doneLoading(id);
 			this.initNextAction();
 			return;
+		}
+
+		// Cross-device auto-pull (custom fork): the league is now loaded in the
+		// worker. On entering a league, pull a newer server copy if one exists.
+		// Guarded internally so it only acts when the open league changes.
+		if (inLeague && updateEvents.includes("firstRun")) {
+			void checkAndPullOnLoad();
 		}
 
 		// If there was an error before, still show it unless we've received some other data. Otherwise, noop refreshes (return undefined from view, for non-matching updateEvent) would clear the error. Clear it only when some data is returned... which still is not great, because maybe the data is from a runBefore function that's different than the one that produced the error. Ideally would either need to track which runBefore function produced the error, this is a hack. THIS MAY NO LONGER BE TRUE AFTER CONSOLIDATING RUNBEFORE INTO A SINGLE FUNCTION, ideally the worker/views function could then handle conflicts itself. But currently the only ones returning errorMessage have just one function so it's either all or nothing.

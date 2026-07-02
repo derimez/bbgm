@@ -519,11 +519,7 @@
 			}
 		},
 		{
-			"images": [
-				"state_farm_arena_2021.jpg",
-				"state_farm_arena_2021__2.jpg",
-				"cup_atlanta_hawks.jpg"
-			],
+			"images": ["state_farm_arena_2021.jpg", "state_farm_arena_2021__2.jpg"],
 			"arena": "state_farm_arena",
 			"inset": {
 				"left": 0.09,
@@ -910,8 +906,7 @@
 			"images": [
 				"barclays_center_2021.jpg",
 				"barclays_center_2021__2.jpg",
-				"barclays_center_2021__3.jpg",
-				"cup_brooklyn_nets.jpg"
+				"barclays_center_2021__3.jpg"
 			],
 			"arena": "barclays_center",
 			"inset": {
@@ -1389,7 +1384,7 @@
 			}
 		},
 		{
-			"images": ["td_garden_2020_2021.jpg", "cup_boston_celtics.jpg"],
+			"images": ["td_garden_2020_2021.jpg"],
 			"arena": "td_garden",
 			"inset": {
 				"left": 0.09,
@@ -1732,7 +1727,7 @@
 			}
 		},
 		{
-			"images": ["spectrum_center_2021.jpg", "cup_charlotte_hornets.jpg"],
+			"images": ["spectrum_center_2021.jpg"],
 			"arena": "spectrum_center",
 			"inset": {
 				"left": 0.09,
@@ -2096,7 +2091,7 @@
 			}
 		},
 		{
-			"images": ["united_center_2020_2021.jpg", "cup_chicago_bulls.jpg"],
+			"images": ["united_center_2020_2021.jpg"],
 			"arena": "united_center",
 			"inset": {
 				"left": 0.09,
@@ -2504,8 +2499,7 @@
 		{
 			"images": [
 				"rocket_mortgage_fieldhouse_2020_2021.jpg",
-				"rocket_mortgage_fieldhouse_2020_2021__2.jpg",
-				"cup_cleveland_cavaliers.jpg"
+				"rocket_mortgage_fieldhouse_2020_2021__2.jpg"
 			],
 			"arena": "rocket_mortgage_fieldhouse",
 			"inset": {
@@ -3060,10 +3054,7 @@
 			}
 		},
 		{
-			"images": [
-				"american_airlines_center_2021.jpg",
-				"cup_dallas_mavericks.jpg"
-			],
+			"images": ["american_airlines_center_2021.jpg"],
 			"arena": "american_airlines_center",
 			"inset": {
 				"left": 0.09,
@@ -3442,11 +3433,7 @@
 			}
 		},
 		{
-			"images": [
-				"ball_arena_2020_2021.jpg",
-				"ball_arena_2021.jpg",
-				"cup_denver_nuggets.jpg"
-			],
+			"images": ["ball_arena_2020_2021.jpg", "ball_arena_2021.jpg"],
 			"arena": "ball_arena",
 			"inset": {
 				"left": 0.09,
@@ -3832,10 +3819,7 @@
 			}
 		},
 		{
-			"images": [
-				"little_caesars_arena_2020_2021.jpg",
-				"cup_detroit_pistons.jpg"
-			],
+			"images": ["little_caesars_arena_2020_2021.jpg"],
 			"arena": "little_caesars_arena",
 			"inset": {
 				"left": 0.09,
@@ -4192,8 +4176,7 @@
 				"chase_center_2021__2.jpg",
 				"chase_center_2021__3.jpg",
 				"chase_center_2021__4.jpg",
-				"chase_center_2021__5.jpg",
-				"cup_golden_state_warriors.jpg"
+				"chase_center_2021__5.jpg"
 			],
 			"arena": "chase_center",
 			"inset": {
@@ -4589,11 +4572,7 @@
 			}
 		},
 		{
-			"images": [
-				"toyota_center_2021.jpg",
-				"toyota_center_2021__2.jpg",
-				"cup_houston_rockets.jpg"
-			],
+			"images": ["toyota_center_2021.jpg", "toyota_center_2021__2.jpg"],
 			"arena": "toyota_center",
 			"inset": {
 				"left": 0.09,
@@ -5042,10 +5021,7 @@
 			}
 		},
 		{
-			"images": [
-				"bankers_life_fieldhouse_2020_2021.jpg",
-				"cup_indiana_pacers.jpg"
-			],
+			"images": ["bankers_life_fieldhouse_2020_2021.jpg"],
 			"arena": "bankers_life_fieldhouse",
 			"inset": {
 				"left": 0.09,
@@ -5865,7 +5841,7 @@
 			}
 		},
 		{
-			"images": ["staples_center_2021.jpg", "cup_los_angeles_clippers.jpg"],
+			"images": ["staples_center_2021.jpg"],
 			"arena": "staples_center",
 			"inset": {
 				"left": 0.09,
@@ -6499,7 +6475,7 @@
 			}
 		},
 		{
-			"images": ["staples_center_2021.jpg", "cup_los_angeles_lakers.jpg"],
+			"images": ["staples_center_2021.jpg"],
 			"arena": "staples_center",
 			"inset": {
 				"left": 0.09,
@@ -6735,8 +6711,7 @@
 				"fedex_forum_2021.jpg",
 				"fedex_forum_2021__2.jpg",
 				"fedex_forum_2021__3.jpg",
-				"fedex_forum_2021__4.jpg",
-				"cup_memphis_grizzlies.jpg"
+				"fedex_forum_2021__4.jpg"
 			],
 			"arena": "fedex_forum",
 			"inset": {
@@ -7099,8 +7074,7 @@
 		{
 			"images": [
 				"american_airlines_arena_2021.jpg",
-				"american_airlines_arena_2021__2.jpg",
-				"cup_miami_heat.jpg"
+				"american_airlines_arena_2021__2.jpg"
 			],
 			"arena": "american_airlines_arena",
 			"inset": {
@@ -7497,8 +7471,7 @@
 			"images": [
 				"fiserv_forum_2021.jpg",
 				"fiserv_forum_2021__2.jpg",
-				"fiserv_forum_2021__3.jpg",
-				"cup_milwaukee_bucks.jpg"
+				"fiserv_forum_2021__3.jpg"
 			],
 			"arena": "fiserv_forum",
 			"inset": {
@@ -7822,10 +7795,7 @@
 			}
 		},
 		{
-			"images": [
-				"target_center_2019_2020.jpg",
-				"cup_minnesota_timberwolves.jpg"
-			],
+			"images": ["target_center_2019_2020.jpg"],
 			"arena": "target_center",
 			"inset": {
 				"left": 0.09,
@@ -8027,8 +7997,7 @@
 		{
 			"images": [
 				"smoothie_king_center_2021.jpg",
-				"smoothie_king_center_2021__2.jpg",
-				"cup_new_orleans_pelicans.jpg"
+				"smoothie_king_center_2021__2.jpg"
 			],
 			"arena": "smoothie_king_center",
 			"inset": {
@@ -8495,8 +8464,7 @@
 		{
 			"images": [
 				"madison_square_garden_iv_2019_2021.jpg",
-				"madison_square_garden_iv_2019_2021__2.jpg",
-				"cup_new_york_knicks.jpg"
+				"madison_square_garden_iv_2019_2021__2.jpg"
 			],
 			"arena": "madison_square_garden_iv",
 			"inset": {
@@ -8870,10 +8838,7 @@
 			}
 		},
 		{
-			"images": [
-				"chesapeake_energy_arena_2020_2021.jpg",
-				"cup_oklahoma_city_thunder.jpg"
-			],
+			"images": ["chesapeake_energy_arena_2020_2021.jpg"],
 			"arena": "chesapeake_energy_arena",
 			"inset": {
 				"left": 0.09,
@@ -9190,7 +9155,7 @@
 			}
 		},
 		{
-			"images": ["amalie_arena_2021.jpg", "cup_orlando_magic.jpg"],
+			"images": ["amalie_arena_2021.jpg"],
 			"arena": "amalie_arena",
 			"inset": {
 				"left": 0.09,
@@ -9755,8 +9720,7 @@
 		{
 			"images": [
 				"wells_fargo_center_2021.jpg",
-				"wells_fargo_center_2021__2.jpg",
-				"cup_philadelphia_76ers.jpg"
+				"wells_fargo_center_2021__2.jpg"
 			],
 			"arena": "wells_fargo_center",
 			"inset": {
@@ -10218,7 +10182,7 @@
 			}
 		},
 		{
-			"images": ["phoenix_suns_arena_2021.jpg", "cup_phoenix_suns.jpg"],
+			"images": ["phoenix_suns_arena_2021.jpg"],
 			"arena": "phoenix_suns_arena",
 			"inset": {
 				"left": 0.09,
@@ -10667,7 +10631,7 @@
 			}
 		},
 		{
-			"images": ["moda_center_2020_2021.jpg", "cup_portland_trail_blazers.jpg"],
+			"images": ["moda_center_2020_2021.jpg"],
 			"arena": "moda_center",
 			"inset": {
 				"left": 0.09,
@@ -11166,7 +11130,7 @@
 			}
 		},
 		{
-			"images": ["golden1_center_2021.jpg", "cup_sacramento_kings.jpg"],
+			"images": ["golden1_center_2021.jpg"],
 			"arena": "golden1_center",
 			"inset": {
 				"left": 0.09,
@@ -11503,7 +11467,7 @@
 			}
 		},
 		{
-			"images": ["at_and_t_center_2021.jpg", "cup_san_antonio_spurs.jpg"],
+			"images": ["at_and_t_center_2021.jpg"],
 			"arena": "at_and_t_center",
 			"inset": {
 				"left": 0.09,
@@ -11901,8 +11865,7 @@
 				"scotiabank_arena_2019_2020__2.jpg",
 				"scotiabank_arena_2019_2020__3.jpg",
 				"scotiabank_arena_2019_2020__4.jpg",
-				"scotiabank_arena_2019_2020__5.jpg",
-				"cup_toronto_raptors.jpg"
+				"scotiabank_arena_2019_2020__5.jpg"
 			],
 			"arena": "scotiabank_arena",
 			"inset": {
@@ -12254,8 +12217,7 @@
 				"vivint_arena_2021.jpg",
 				"vivint_arena_2021__2.jpg",
 				"vivint_arena_2021__3.jpg",
-				"vivint_arena_2021__4.jpg",
-				"cup_utah_jazz.jpg"
+				"vivint_arena_2021__4.jpg"
 			],
 			"arena": "vivint_arena",
 			"inset": {
@@ -12722,10 +12684,7 @@
 			}
 		},
 		{
-			"images": [
-				"capital_one_arena_2020_2021.jpg",
-				"cup_washington_wizards.jpg"
-			],
+			"images": ["capital_one_arena_2020_2021.jpg"],
 			"arena": "capital_one_arena",
 			"inset": {
 				"left": 0.09,

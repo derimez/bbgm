@@ -9,6 +9,7 @@ import { defaultInjuries } from "../util/defaultInjuries.ts";
 import { newLeagueGodModeLimits } from "../util/newLeagueGodModeLimits.ts";
 import { getNewLeagueLid } from "../util/getNewLeagueLid.ts";
 import { defaultGameAttributes } from "../../common/defaultGameAttributes.ts";
+import seedRealOverrides from "../core/league/seedRealOverrides.ts";
 
 const getDefaultRealStats = () => {
 	return env.mobile ? "none" : "allActiveHOF";
@@ -456,6 +457,10 @@ export const getDefaultSettings = () => {
 };
 
 export const getRealTeamInfo = async () => {
+	// Make sure the fork's real team info has been seeded into the meta store
+	// before we read it, so the wizard shows real NBA names/logos on first load.
+	await seedRealOverrides();
+
 	const realTeamInfo = (await idb.meta.get("attributes", "realTeamInfo")) as
 		| RealTeamInfo
 		| undefined;

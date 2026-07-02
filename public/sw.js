@@ -63,6 +63,12 @@ const navigationRoute = new NavigationRoute(handler, {
 		new RegExp("^/robots.txt"),
 		new RegExp("^/sw.js"),
 		new RegExp("^/upgrade-"),
+		// Server-rendered pages served by the sync/simcast Express server — these are
+		// NOT SPA routes, so the navigation fallback must not hijack them to /index.html
+		// (that was serving the SPA's "Page not found" inside the live Simcast panel).
+		new RegExp("^/simcast"),
+		new RegExp("^/recaps"),
+		new RegExp("^/api/"),
 	],
 });
 registerRoute(navigationRoute);

@@ -317,19 +317,11 @@ const CUP_TEAM = {
 function parseFilename(fn) {
 	if (!fn.endsWith(".jpg")) return null;
 	const base = fn.slice(0, -4);
-	// NBA Cup floor — short-circuit through CUP_TEAM, no year parsing needed.
-	// These map to a single franchise and only apply to season >= 2024.
-	if (/^cup_/.test(base)) {
-		if (!(base in CUP_TEAM)) return null;
-		return {
-			fn,
-			arena: base,
-			startYear: 2024,
-			endYear: 2099,
-			dupe: 0,
-			cup: true,
-		};
-	}
+	// NBA Cup tournament floors are garish special-event designs, not a team's
+	// real home court, and they're period-incorrect for any historical season.
+	// Skip them entirely so only real arenas end up in the pool. (CUP_TEAM is
+	// retained above for reference but no longer feeds the manifest.)
+	if (/^cup_/.test(base)) return null;
 	if (/all_star|celebrity|_detail$/.test(base)) return null;
 	if (
 		/_rising_stars_|_shooting_stars|_skills_challenge|_saturday_night/.test(

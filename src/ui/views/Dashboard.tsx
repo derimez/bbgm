@@ -201,7 +201,13 @@ const dropdownStyle: CSSProperties = {
 	position: "static",
 };
 
-type ServerLeague = { lid: number; name: string; saved_at: number };
+type ServerLeague = {
+	sync_id: string;
+	name: string | null;
+	season: number;
+	phase: number;
+	last_saved: number;
+};
 
 const Dashboard = ({ leagues }: View<"dashboard">) => {
 	const [loadingLID, setLoadingLID] = useState<number | undefined>();
@@ -211,11 +217,14 @@ const Dashboard = ({ leagues }: View<"dashboard">) => {
 	useTitleBar();
 
 	useEffect(() => {
-		fetch("/api/leagues")
+		// v2 sync is keyed by syncId (stable across devices), not lid. We can't
+		// reliably dedupe against local leagues here (the dashboard list doesn't
+		// expose each league's syncId), so we show all server leagues — restoring
+		// one you already have just makes a harmless extra copy you can delete.
+		fetch("/api/v2/leagues")
 			.then((r) => r.json())
 			.then((all: ServerLeague[]) => {
-				const localLids = new Set(leagues.map((l) => l.lid));
-				setServerLeagues(all.filter((sl) => !localLids.has(sl.lid)));
+				setServerLeagues(all);
 			})
 			.catch(() => {});
 	}, [leagues]);
@@ -529,14 +538,19 @@ const Dashboard = ({ leagues }: View<"dashboard">) => {
 					<ul className="list-group" style={{ maxWidth: 480 }}>
 						{serverLeagues.map((sl) => {
 							const restoreUrl = `/new_league#importUrl=${encodeURIComponent(
-								`${window.location.origin}/api/restore/${sl.lid}`,
+								`${window.location.origin}/api/v2/pull/${sl.sync_id}`,
 							)}`;
 							return (
 								<li
-									key={sl.lid}
+									key={sl.sync_id}
 									className="list-group-item d-flex justify-content-between align-items-center"
 								>
-									<span>{sl.name ?? `League ${sl.lid}`}</span>
+									<span>
+										{sl.name ?? "League"}{" "}
+										<small className="text-body-secondary">
+											· {sl.season} (phase {sl.phase})
+										</small>
+									</span>
 									<a href={restoreUrl} className="btn btn-sm btn-primary">
 										Restore
 									</a>
