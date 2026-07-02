@@ -16,6 +16,10 @@ import type {
 } from "../../ui/views/Exhibition.tsx";
 import { GameSim, player, realRosters, team } from "../core/index.ts";
 import { processTeam } from "../core/game/loadTeams.ts";
+import {
+	makeLiveSimSeed,
+	runAndStashLiveSim,
+} from "../core/game/liveSimStash.ts";
 import { gameSimToBoxScore } from "../core/game/writeGameStats.ts";
 import { getRosterOrderByPid } from "../core/team/rosterAutoSort.basketball.ts";
 import { connectLeague, idb } from "../db/index.ts";
@@ -434,7 +438,7 @@ export const simExhibitionGame = async (
 	// Hacky, but if you send the same gid once, processLiveGameEvents won't reset playersByPid
 	const gid = randInt(0, 1000000000);
 
-	const result = new GameSim({
+	const gameSimInput: any = {
 		gid,
 		day: -1,
 		teams: teamsProcessed,
@@ -444,7 +448,15 @@ export const simExhibitionGame = async (
 		allStarGame: false,
 		baseInjuryRate: g.get("injuryRate"),
 		dh,
-	}).run();
+	};
+
+	// Basketball exhibitions run seeded + stashed so live coach mode can re-sim
+	// the remainder mid-game, same as league live games in play.ts. Exhibitions
+	// are actually the feature's best home: nothing is persisted, so a coached
+	// outcome can't contradict the DB.
+	const result = isSport("basketball")
+		? runAndStashLiveSim(gid, gameSimInput, makeLiveSimSeed())
+		: new GameSim(gameSimInput).run();
 
 	// Hacky way to skip playoff database access in gameSimToBoxScore
 	g.setWithoutSavingToDB("phase", PHASE.REGULAR_SEASON);

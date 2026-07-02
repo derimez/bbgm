@@ -416,8 +416,8 @@ const emitSimTick = (gameClock: number, gameOver: boolean, period: number) => {
 // from the pause point. Same seed + same inputs means everything already
 // watched stays canon — only the future changes. The new tail is spliced into
 // the local playback queue and pushed to the simcast so the court view diverges
-// in lockstep. Basketball league games only (exhibitions don't go through the
-// seeded live-sim stash).
+// in lockstep. Basketball only; league live games AND exhibitions both run
+// through the seeded live-sim stash.
 
 // Broadcast the coached game to the simcast. Same filtering as the gameStart
 // packet in processLiveGameEvents.basketball: drop the leading init event and
@@ -1563,9 +1563,7 @@ export const LiveGame = (props: View<"liveGame">) => {
 					{boxScore.current.gid >= 0 && isSport("basketball") ? (
 						<SimcastPanel />
 					) : null}
-					{boxScore.current.gid >= 0 &&
-					isSport("basketball") &&
-					!boxScore.current.exhibition ? (
+					{boxScore.current.gid >= 0 && isSport("basketball") ? (
 						<CoachPanel
 							boxScore={boxScore.current}
 							onApply={applyCoaching}
