@@ -10,6 +10,7 @@ import {
 	trade,
 } from "../index.ts";
 import loadTeams from "./loadTeams.ts";
+import { makeLiveSimSeed, runAndStashLiveSim } from "./liveSimStash.ts";
 import updatePlayoffSeries from "./updatePlayoffSeries.ts";
 import writeGameStats from "./writeGameStats.ts";
 import writePlayerStats, {
@@ -393,7 +394,7 @@ const play = async (
 			baseInjuryRate = g.get("injuryRate");
 		}
 
-		return new GameSim({
+		const gameSimInput: any = {
 			gid,
 			day,
 			teams,
@@ -402,10 +403,17 @@ const play = async (
 			neutralSite: neutralSite || allStarGame,
 			allStarGame,
 			baseInjuryRate,
-
-			// @ts-expect-error
 			dh,
-		}).run();
+		};
+
+		// Live "coach mode" (basketball only): sim the live game under a fixed RNG
+		// seed and stash its exact inputs, so it can be re-simmed with a mid-game
+		// coaching change spliced in. Normal (non-live) games are unaffected.
+		if (doPlayByPlay && isSport("basketball")) {
+			return runAndStashLiveSim(gid, gameSimInput, makeLiveSimSeed());
+		}
+
+		return new GameSim(gameSimInput).run();
 	};
 
 	// Simulates a day of games (whatever is in schedule) and passes the results to cbSaveResults

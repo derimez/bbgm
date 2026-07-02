@@ -92,6 +92,10 @@ import {
 	getAutoTicketPriceByTid,
 	getBaseAttendance,
 } from "../core/game/attendance.ts";
+import {
+	clearLiveSimStash,
+	resimLiveGameWithCoaching,
+} from "../core/game/liveSimStash.ts";
 import goatFormula from "../util/goatFormula.ts";
 import getRandomTeams from "./getRandomTeams.ts";
 import { withState } from "../core/player/name.ts";
@@ -3906,8 +3910,23 @@ const switchTeam = async (tid: number, conditions: Conditions) => {
 
 const onLiveSimOver = async () => {
 	local.liveSimRatingsStatsPopoverPlayers = undefined;
+	clearLiveSimStash();
 
 	await toUI("updateLocal", [{ liveGameInProgress: false }]);
+};
+
+// Live "coach mode": re-sim the current live game with a mid-game coaching
+// change spliced in, returning the new full play-by-play (identical up to the
+// earliest change, divergent after). Returns undefined if the game isn't
+// stashed (e.g. the worker restarted since the game started).
+const resimFromCoaching = async ({
+	gid,
+	coachingSchedule,
+}: {
+	gid: number;
+	coachingSchedule: any[];
+}) => {
+	return resimLiveGameWithCoaching(gid, coachingSchedule);
 };
 
 const updateBudget = async ({
@@ -5317,6 +5336,7 @@ export default {
 		toggleTradeDeadline,
 		tradeCounterOffer,
 		onLiveSimOver,
+		resimFromCoaching,
 		updateAwards,
 		updateBudget,
 		updateConfsDivs,

@@ -91,6 +91,21 @@ type PlayerGameSim = {
 		playingThrough: boolean;
 	};
 	ptModifier: number;
+
+	// Live "coach mode" overrides (set mid-sim by applyPendingCoaching)
+	forceOn?: boolean; // guaranteed on the court
+	forceOff?: boolean; // benched (unless roster is too thin to field 5)
+};
+
+// A scheduled mid-game coaching change for the live re-sim feature. The sim
+// applies it the first possession the game clock reaches (period, clock).
+type CoachingChange = {
+	period: number; // 1-indexed period the change triggers in
+	clock: number; // seconds remaining on the game clock at/after which to apply
+	pt?: Record<number, number>; // pid -> playing-time modifier
+	forceOn?: number[]; // pids to force onto the court
+	forceOff?: number[]; // pids to force onto the bench
+	clearForce?: boolean; // release all prior force-on/off before applying
 };
 type TeamGameSim = {
 	id: number;
@@ -207,6 +222,10 @@ class GameSim extends GameSimBase {
 	possessionLength = 0;
 	lastOrbPlayer: PlayerGameSim | undefined;
 
+	// Live "coach mode": scheduled changes applied mid-sim (empty for normal games)
+	coachingSchedule: CoachingChange[];
+	coachingApplied: boolean[];
+
 	/**
 	 * Initialize the two teams that are playing this game.
 	 *
@@ -221,6 +240,7 @@ class GameSim extends GameSimBase {
 		allStarGame,
 		baseInjuryRate,
 		neutralSite,
+		coachingSchedule,
 	}: {
 		gid: number;
 		day?: number;
@@ -230,6 +250,7 @@ class GameSim extends GameSimBase {
 		allStarGame: boolean;
 		baseInjuryRate: number;
 		neutralSite: boolean;
+		coachingSchedule?: CoachingChange[];
 	}) {
 		super({
 			gid,
@@ -239,6 +260,11 @@ class GameSim extends GameSimBase {
 			neutralSite,
 		});
 		this.playByPlay = new PlayByPlayLogger(doPlayByPlay);
+
+		// Live coach mode (empty for a normal game). Set before the constructor's
+		// updatePlayersOnCourt — that call never reads it, but keep it defined.
+		this.coachingSchedule = coachingSchedule ?? [];
+		this.coachingApplied = this.coachingSchedule.map(() => false);
 
 		this.team = teams; // If a team plays twice in a day, this needs to be a deep copy
 
@@ -396,6 +422,8 @@ class GameSim extends GameSimBase {
 
 				// @ts-expect-error
 				delete p.ptModifier;
+				delete p.forceOn;
+				delete p.forceOff;
 				delete p.stat.benchTime;
 				delete p.stat.courtTime;
 				delete p.stat.energy;
@@ -786,7 +814,71 @@ class GameSim extends GameSimBase {
 		}
 	}
 
+	// Live "coach mode": apply any scheduled coaching changes whose (period,
+	// clock) trigger the game has now reached. Called once per possession. Draws
+	// ZERO randomness until a change actually fires — so for a normal game (empty
+	// schedule) or a re-sim before its pause point, this is a pure no-op and the
+	// RNG stream (hence the play-by-play) is byte-identical to the original.
+	applyPendingCoaching() {
+		if (this.coachingSchedule.length === 0) {
+			return;
+		}
+
+		// ptsQtrs grows one entry per period, so its length is the 1-indexed
+		// current period (> numPeriods during overtime).
+		const currentPeriod = this.team[0].stat.ptsQtrs.length;
+
+		let applied = false;
+		for (let i = 0; i < this.coachingSchedule.length; i++) {
+			if (this.coachingApplied[i]) {
+				continue;
+			}
+			const c = this.coachingSchedule[i]!;
+			const reached =
+				currentPeriod > c.period ||
+				(currentPeriod === c.period && this.t <= c.clock);
+			if (!reached) {
+				continue;
+			}
+
+			this.coachingApplied[i] = true;
+			applied = true;
+
+			for (const t of teamNums) {
+				for (const p of this.team[t].player) {
+					if (c.clearForce) {
+						delete p.forceOn;
+						delete p.forceOff;
+					}
+					if (c.pt && c.pt[p.id] !== undefined) {
+						p.ptModifier = c.pt[p.id]!;
+					}
+					if (c.forceOn?.includes(p.id)) {
+						p.forceOn = true;
+						delete p.forceOff;
+					}
+					if (c.forceOff?.includes(p.id)) {
+						p.forceOff = true;
+						delete p.forceOn;
+					}
+				}
+			}
+		}
+
+		if (applied) {
+			// Re-run subs immediately so the change takes hold at the pause point
+			// (this is the first randomness draw that diverges the tail).
+			const substitutions = this.updatePlayersOnCourt();
+			if (substitutions) {
+				this.updateSynergy();
+			}
+		}
+	}
+
 	simPossession() {
+		// Live coach mode: apply scheduled changes before the possession runs
+		this.applyPendingCoaching();
+
 		// Possession change
 		this.o = this.o === 1 ? 0 : 1;
 		this.d = this.o === 1 ? 0 : 1;
@@ -959,9 +1051,12 @@ class GameSim extends GameSimBase {
 				const ovrs: Record<number, number> = {};
 
 				for (const [i, p] of this.team[t].player.entries()) {
-					// Injured or fouled out players can't play
+					// Injured, fouled out, or coach-benched players can't play
+					// (force-off is lifted in the includeFouledOut fallback so a
+					// benched player is still used if the roster can't field 5).
 					if (
 						p.injured ||
+						(!includeFouledOut && p.forceOff) ||
 						(!includeFouledOut &&
 							foulsNeededToFoulOut > 0 &&
 							p.stat.pf >= foulsNeededToFoulOut)
@@ -984,6 +1079,12 @@ class GameSim extends GameSimBase {
 							// If it's not a blowout, worry about foul trouble
 							const foulTroubleFactor = this.getFoulTroubleFactor(p, foulLimit);
 							ovrs[p.id]! *= foulTroubleFactor;
+						}
+
+						// Live coach mode: a force-on player dominates all scaling so
+						// the sub logic always keeps them on the court.
+						if (p.forceOn) {
+							ovrs[p.id]! *= 1e6;
 						}
 					}
 				}
@@ -1036,9 +1137,14 @@ class GameSim extends GameSimBase {
 						ovrs[b.id]! > ovrs[p.id]!;
 					const benchIsEligible = ovrs[b.id] !== -Infinity;
 
+					// Live coach mode: a user-forced player is a mandatory sub-in
+					// (bypasses the normal court-time / "is better" gating).
+					const benchIsForcedOn = !!b.forceOn && benchIsEligible;
+
 					if (
 						benchIsValidAndBetter ||
-						(onCourtIsIneligible && benchIsEligible)
+						(onCourtIsIneligible && benchIsEligible) ||
+						benchIsForcedOn
 					) {
 						// Check if position of substitute makes for a valid lineup
 						const pos: string[] = [];
@@ -1085,7 +1191,11 @@ class GameSim extends GameSimBase {
 							(numG < cutoff && numPG === 0) ||
 							(numF < cutoff && numC === 0)
 						) {
-							if (this.fatigue(p.stat.energy) > 0.728 && !onCourtIsIneligible) {
+							if (
+								this.fatigue(p.stat.energy) > 0.728 &&
+								!onCourtIsIneligible &&
+								!benchIsForcedOn
+							) {
 								// Exception for ridiculously tired players, so really unbalanced teams won't play starters whole game
 								continue;
 							}
