@@ -396,6 +396,24 @@ app.post("/api/sim-control", (req, res) => {
 	res.json({ ok: true });
 });
 
+// ── Live coach mode — mid-game re-sim splice ─────────────────────────────────
+// After a coaching change, BBGM's LiveGame re-sims the rest of the game (same
+// seed, so the prefix is byte-identical) and POSTs the FULL new event list here
+// (same filtering as the gameStart packet: init + "stat" entries stripped).
+// Connected simcast clients swap in everything they haven't fired yet; the
+// stored packet is updated so late joiners replay the coached game.
+app.post("/api/sim-splice", (req, res) => {
+	const { gid, events } = req.body ?? {};
+	if (!Array.isArray(events)) {
+		return res.status(400).json({ error: "events array required" });
+	}
+	if (lastGameStart) {
+		lastGameStart.events = events;
+	}
+	broadcast({ kind: "eventsSplice", gid, events });
+	res.json({ ok: true });
+});
+
 // Kick off recap generation for a finished game. Fire-and-forget: a 'pending'
 // row is written immediately so the card appears in the browse-back UI, then the
 // row is upgraded to 'done' (or 'error') once Ollama returns. All failures are

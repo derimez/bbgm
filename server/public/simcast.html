@@ -1418,6 +1418,7 @@
 
 				// Load the full pre-simulated game into the queue and start the scheduler.
 				eventQueue.length = 0;
+				firedEventCount = 0;
 				if (drainTimer !== null) {
 					clearTimeout(drainTimer);
 					drainTimer = null;
@@ -3574,6 +3575,11 @@
 			// the moment event N (a defensive rebound, say) resolves — and arrives just as
 			// event N+1 fires.
 			const eventQueue = [];
+			// How many events from the game's full (filtered) list have already fired.
+			// Live coach mode splices in a re-simmed game whose prefix is byte-identical
+			// to the original, so this index is all that's needed to align the new list:
+			// everything before it already played, everything from it on gets replaced.
+			let firedEventCount = 0;
 			let nextEarliestMs = 0;
 			let drainTimer = null;
 
@@ -3626,6 +3632,7 @@
 					// playhead has descended to their clock.
 					if (hasClock && playhead > head.clock) break;
 					const ev = eventQueue.shift();
+					firedEventCount += 1;
 					const next = eventQueue[0];
 					const next2 = eventQueue[1];
 					handleEvent(ev);
@@ -3822,6 +3829,26 @@
 				return ev.clock - bbgmClock; // clock = seconds remaining; higher = earlier
 			}
 
+			// ── Live coach mode — mid-game event splice ────────────────────────────────
+			// A coaching change re-simmed the rest of the game. The incoming full event
+			// list (same gameStart filtering) is byte-identical to the original for
+			// everything already fired — same seed, same inputs up to the change — so
+			// alignment is pure index math: mirror the init-time tipoff transform
+			// (jumpBall consumed inline, never counted as fired), re-stamp choreography
+			// over the new game, and swap in everything from firedEventCount on.
+			function applyEventsSplice(m) {
+				const incoming = Array.isArray(m.events) ? m.events : null;
+				if (!incoming || !teams[0]) return;
+				buildGameChoreography(incoming);
+				const list = incoming.slice();
+				const jbIdx = list.findIndex((e) => e?.type === "jumpBall");
+				if (jbIdx !== -1 && jbIdx < 3) {
+					list.splice(jbIdx, 1);
+				}
+				eventQueue.length = 0;
+				for (const ev of list.slice(firedEventCount)) eventQueue.push(ev);
+			}
+
 			// ── WebSocket ─────────────────────────────────────────────────────────────
 			let ws;
 			function connect() {
@@ -3845,6 +3872,8 @@
 						initFromGameStart(m);
 					} else if (m.kind === "control") {
 						applyControl(m);
+					} else if (m.kind === "eventsSplice") {
+						applyEventsSplice(m);
 					}
 					// No more "event" messages — the entire game arrives in gameStart.events.
 				};
@@ -3861,6 +3890,7 @@
 				paceScale: +paceScale().toFixed(2),
 				playhead: playhead !== null ? +playhead.toFixed(1) : null,
 				queueLen0: eventQueue.length,
+				firedEventCount,
 				lastInst,
 				bbgmClock,
 				speed,

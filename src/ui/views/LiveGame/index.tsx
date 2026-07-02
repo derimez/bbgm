@@ -410,6 +410,255 @@ const emitSimTick = (gameClock: number, gameOver: boolean, period: number) => {
 	emitSimControl({ gameClock, gameOver, period });
 };
 
+// ── Live coach mode ───────────────────────────────────────────────────────────
+// Pause the game, hand out new orders (force players onto the floor or the
+// bench, playing time up/down), and the worker re-sims the REST of the game
+// from the pause point. Same seed + same inputs means everything already
+// watched stays canon — only the future changes. The new tail is spliced into
+// the local playback queue and pushed to the simcast so the court view diverges
+// in lockstep. Basketball league games only (exhibitions don't go through the
+// seeded live-sim stash).
+
+// Broadcast the coached game to the simcast. Same filtering as the gameStart
+// packet in processLiveGameEvents.basketball: drop the leading init event and
+// the per-stat increments. Fire-and-forget, like emitSimControl.
+const emitSimSplice = (gid: number, newEvents: any[]) => {
+	if (typeof fetch === "undefined" || !isSport("basketball")) {
+		return;
+	}
+	try {
+		fetch("/api/sim-splice", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				gid,
+				events: newEvents.slice(1).filter((ev: any) => ev?.type !== "stat"),
+			}),
+			keepalive: true,
+		}).catch(() => {});
+	} catch {}
+};
+
+type CoachOrder = {
+	force?: "on" | "off";
+	pt?: number;
+};
+
+type CoachOrders = {
+	pt: Record<number, number>;
+	forceOn: number[];
+	forceOff: number[];
+};
+
+const CoachPanel = ({
+	boxScore,
+	onApply,
+	onOpenPause,
+	paused,
+}: {
+	boxScore: any;
+	onApply: (orders: CoachOrders) => Promise<string>;
+	onOpenPause: () => void;
+	paused: boolean;
+}) => {
+	const [open, setOpen] = useState(false);
+	const [busy, setBusy] = useState(false);
+	const [orders, setOrders] = useState<Record<number, CoachOrder>>({});
+	const [status, setStatus] = useState<string | undefined>();
+
+	const setForce = (pid: number, force: CoachOrder["force"]) => {
+		setOrders((prev) => ({ ...prev, [pid]: { ...prev[pid], force } }));
+	};
+	const setPt = (pid: number, pt: number | undefined) => {
+		setOrders((prev) => ({ ...prev, [pid]: { ...prev[pid], pt } }));
+	};
+
+	const disabled =
+		busy ||
+		!paused ||
+		boxScore.gameOver ||
+		boxScore.shootout ||
+		boxScore.elamTarget !== undefined;
+
+	const apply = async () => {
+		const pt: Record<number, number> = {};
+		const forceOn: number[] = [];
+		const forceOff: number[] = [];
+		for (const [pidStr, order] of Object.entries(orders)) {
+			const pid = Number(pidStr);
+			if (order.pt !== undefined) {
+				pt[pid] = order.pt;
+			}
+			if (order.force === "on") {
+				forceOn.push(pid);
+			} else if (order.force === "off") {
+				forceOff.push(pid);
+			}
+		}
+
+		setBusy(true);
+		setStatus("Re-simming the rest of the game…");
+		try {
+			setStatus(await onApply({ pt, forceOn, forceOff }));
+		} catch (error) {
+			setStatus(`Re-sim failed: ${(error as Error).message}`);
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	return (
+		<div className="card mb-3">
+			<div className="card-header py-1 px-2 d-flex align-items-center">
+				<span className="fw-bold text-body-secondary small">Coach mode</span>
+				<div className="ms-auto btn-group btn-group-sm">
+					<button
+						type="button"
+						className="btn btn-light-bordered"
+						onClick={() => {
+							if (!open) {
+								// Coaching happens from a dead ball — pause on open.
+								onOpenPause();
+							}
+							setOpen((o) => !o);
+						}}
+					>
+						{open ? "Hide" : "Coach"}
+					</button>
+				</div>
+			</div>
+			{open ? (
+				<div className="card-body p-2">
+					{boxScore.gameOver ? (
+						<p className="text-body-secondary mb-2">
+							Game over — nothing left to coach.
+						</p>
+					) : !paused ? (
+						<p className="text-body-secondary mb-2">
+							Pause the game to make changes.
+						</p>
+					) : null}
+					<div className="row">
+						{([0, 1] as const).map((t) => (
+							<div className="col-12 col-xl-6" key={t}>
+								<h5>
+									{boxScore.teams[t].region} {boxScore.teams[t].name}
+								</h5>
+								<div className="table-responsive">
+									<table className="table table-sm align-middle mb-2">
+										<thead>
+											<tr>
+												<th>Player</th>
+												<th className="text-end">MIN</th>
+												<th className="text-end">PTS</th>
+												<th>Floor</th>
+												<th>PT</th>
+											</tr>
+										</thead>
+										<tbody>
+											{boxScore.teams[t].players.map((p: any) => {
+												const order = orders[p.pid] ?? {};
+												const injured = p.injury?.gamesRemaining === -1;
+												return (
+													<tr
+														key={p.pid}
+														className={p.inGame ? "table-warning" : undefined}
+													>
+														<td>
+															{p.name}
+															<span className="text-body-secondary">
+																{" "}
+																{p.pos}
+															</span>
+															{injured ? (
+																<span className="text-danger"> (injured)</span>
+															) : null}
+														</td>
+														<td className="text-end">{Math.round(p.min)}</td>
+														<td className="text-end">{p.pts}</td>
+														<td>
+															<div className="btn-group btn-group-sm">
+																{(
+																	[
+																		["Auto", undefined],
+																		["On", "on"],
+																		["Bench", "off"],
+																	] as const
+																).map(([label, value]) => (
+																	<button
+																		key={label}
+																		type="button"
+																		className={`btn ${
+																			order.force === value
+																				? "btn-primary"
+																				: "btn-light-bordered"
+																		}`}
+																		disabled={
+																			disabled || (injured && value === "on")
+																		}
+																		onClick={() => setForce(p.pid, value)}
+																	>
+																		{label}
+																	</button>
+																))}
+															</div>
+														</td>
+														<td>
+															<select
+																className="form-select form-select-sm"
+																style={{ width: 90 }}
+																disabled={disabled}
+																value={
+																	order.pt === undefined ? "" : String(order.pt)
+																}
+																onChange={(event) => {
+																	const { value } = event.target;
+																	setPt(
+																		p.pid,
+																		value === "" ? undefined : Number(value),
+																	);
+																}}
+															>
+																<option value="">Auto</option>
+																<option value="0">0</option>
+																<option value="0.75">−</option>
+																<option value="1">Normal</option>
+																<option value="1.25">+</option>
+																<option value="1.75">++</option>
+															</select>
+														</td>
+													</tr>
+												);
+											})}
+										</tbody>
+									</table>
+								</div>
+							</div>
+						))}
+					</div>
+					<div className="d-flex align-items-center">
+						<button
+							type="button"
+							className="btn btn-primary"
+							disabled={disabled}
+							onClick={apply}
+						>
+							{busy ? "Re-simming…" : "Apply — re-sim rest of game"}
+						</button>
+						{status ? <div className="ms-3">{status}</div> : null}
+					</div>
+					{boxScore.shootout || boxScore.elamTarget !== undefined ? (
+						<p className="text-body-secondary mt-2 mb-0">
+							Coaching changes aren't available during a shootout or Elam
+							Ending.
+						</p>
+					) : null}
+				</div>
+			) : null}
+		</div>
+	);
+};
+
 const getNavigateWarning = (exhibition: boolean | undefined) => {
 	return exhibition
 		? "If you navigate away from this page, you won't be able to see this box score again."
@@ -442,6 +691,14 @@ export const LiveGame = (props: View<"liveGame">) => {
 	const possessionChange = useRef<boolean | undefined>(undefined);
 	const componentIsMounted = useRef(false);
 	const events = useRef<any[] | undefined>(undefined);
+
+	// Live coach mode: events.current is consumed destructively as plays render,
+	// so keep the FULL event list of the current timeline too — consumed count =
+	// allEvents.length − events.length, which is where a re-simmed game gets
+	// spliced in. Every accepted coaching change accumulates in the schedule
+	// because each re-sim replays the whole game from the tip-off.
+	const allEvents = useRef<any[] | undefined>(undefined);
+	const coachingScheduleRef = useRef<any[]>([]);
 	const sportState = useRef(
 		DEFAULT_SPORT_STATE ? { ...DEFAULT_SPORT_STATE } : undefined,
 	);
@@ -661,6 +918,7 @@ export const LiveGame = (props: View<"liveGame">) => {
 	const startLiveGame = useCallback(
 		(events2: any[]) => {
 			events.current = events2;
+			allEvents.current = events2.slice();
 			setTimeout(() => {
 				processToNextPause();
 				setPlayIndex((prev) => prev + 1);
@@ -706,6 +964,77 @@ export const LiveGame = (props: View<"liveGame">) => {
 		processToNextPause(true);
 		setPlayIndex((prev) => prev + 1);
 	}, [processToNextPause]);
+
+	// Live coach mode: re-sim the rest of the game with the new orders and splice
+	// the new tail into the playback queue. Runs while paused, so no setTimeout
+	// playback callback can be consuming events.current concurrently (they no-op
+	// on pausedRef). Returns a status string for the coach panel.
+	const applyCoaching = useCallback(
+		async (orders: CoachOrders): Promise<string> => {
+			const all = allEvents.current;
+			if (!all || !events.current) {
+				return "Game events not available yet.";
+			}
+			const gid = boxScore.current.gid;
+			// ptsQtrs grows one entry per period INCLUDING overtimes, matching the
+			// sim's own period counter (quarters.current does not grow in OT).
+			const period = Math.max(1, boxScore.current.teams[0].ptsQtrs.length);
+			const clockNow = getSeconds(boxScore.current.time);
+			const consumed = all.length - events.current.length;
+
+			// The change fires at the first possession whose game clock has reached
+			// (period, clock). The displayed clock can sit mid-possession, so a
+			// trigger keyed exactly to it can (rarely) fire one possession EARLY in
+			// the re-sim and rewrite a play that was already shown. Verify the
+			// consumed prefix is untouched; on mismatch retry with a later trigger.
+			for (const backoff of [0, 2, 6]) {
+				const change = {
+					period,
+					clock: clockNow - backoff,
+					pt: orders.pt,
+					forceOn: orders.forceOn,
+					forceOff: orders.forceOff,
+					// Each apply is a full snapshot of the standing orders, so releasing
+					// a toggle in the UI genuinely releases the player in the engine.
+					clearForce: true,
+				};
+				const schedule = [...coachingScheduleRef.current, change];
+				const newEvents = await toWorker("main", "resimFromCoaching", {
+					gid,
+					coachingSchedule: schedule,
+				});
+				if (!newEvents) {
+					return "Re-sim unavailable — the live game is no longer stashed in the worker.";
+				}
+
+				// [0] is the init event, which embeds the FINAL box score — it always
+				// differs between outcomes and was consumed before anything displayed.
+				let prefixIntact = newEvents.length >= consumed;
+				if (prefixIntact) {
+					for (let i = 1; i < consumed; i++) {
+						if (JSON.stringify(newEvents[i]) !== JSON.stringify(all[i])) {
+							prefixIntact = false;
+							break;
+						}
+					}
+				}
+				if (!prefixIntact) {
+					continue;
+				}
+
+				coachingScheduleRef.current = schedule;
+				allEvents.current = newEvents;
+				events.current = newEvents.slice(consumed);
+
+				// Push the coached game to the simcast so the court view diverges too.
+				emitSimSplice(gid, newEvents);
+
+				return `New orders in — the rest of the game has been re-simmed from ${boxScore.current.quarterShort} ${boxScore.current.time} (${newEvents.length - consumed} events rewritten).`;
+			}
+			return "The change kept landing on a play that already happened — advance one play and try again.";
+		},
+		[],
+	);
 
 	const fastForwardMenuItems = useMemo(() => {
 		// Plays up to `cutoffs` seconds, or until end of quarter
@@ -1233,6 +1562,16 @@ export const LiveGame = (props: View<"liveGame">) => {
 					) : null}
 					{boxScore.current.gid >= 0 && isSport("basketball") ? (
 						<SimcastPanel />
+					) : null}
+					{boxScore.current.gid >= 0 &&
+					isSport("basketball") &&
+					!boxScore.current.exhibition ? (
+						<CoachPanel
+							boxScore={boxScore.current}
+							onApply={applyCoaching}
+							onOpenPause={handlePause}
+							paused={paused}
+						/>
 					) : null}
 					{boxScore.current.gid >= 0 ? (
 						<BoxScoreWrapper
