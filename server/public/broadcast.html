@@ -185,6 +185,83 @@
 				text-align: center;
 				padding: 40px;
 			}
+			.modebar {
+				display: flex;
+				gap: 8px;
+				margin-bottom: 14px;
+			}
+			.modebtn {
+				flex: 1;
+				text-align: center;
+				padding: 9px 10px;
+				border: 1px solid var(--line);
+				border-radius: 9px;
+				background: var(--panel);
+				color: var(--muted);
+				cursor: pointer;
+				font-size: 13px;
+				font-weight: 600;
+			}
+			.modebtn.on {
+				border-color: var(--accent);
+				color: var(--accent);
+				background: var(--panel2);
+			}
+			.seg {
+				margin: 6px 0 14px;
+			}
+			.seghd {
+				color: var(--muted);
+				font-size: 12px;
+				font-weight: 700;
+				text-transform: uppercase;
+				letter-spacing: 0.5px;
+				padding: 8px 10px;
+				background: var(--panel2);
+				border-radius: 8px;
+				margin: 12px 0 6px;
+			}
+			.utt {
+				display: grid;
+				grid-template-columns: 56px 1fr;
+				gap: 10px;
+				padding: 7px 10px;
+				border-bottom: 1px solid #1a2027;
+				align-items: baseline;
+			}
+			.utt .who {
+				font-size: 11px;
+				font-weight: 800;
+				letter-spacing: 0.5px;
+			}
+			.utt.pbp .who {
+				color: var(--accent);
+			}
+			.utt.color .who {
+				color: #c98bff;
+			}
+			.utt.color .line {
+				color: #cbb0ef;
+				font-style: italic;
+			}
+			.genbar {
+				margin: 24px 0;
+				text-align: center;
+				color: var(--muted);
+			}
+			.genbar .track {
+				height: 8px;
+				background: var(--panel2);
+				border-radius: 4px;
+				overflow: hidden;
+				margin-top: 10px;
+			}
+			.genbar .fill {
+				height: 100%;
+				background: var(--accent);
+				width: 0;
+				transition: width 0.3s;
+			}
 		</style>
 	</head>
 	<body>
@@ -282,6 +359,12 @@
 
 				let html =
 					'<div class="back" onclick="showList()">← All broadcasts</div>' +
+					'<div class="modebar">' +
+					'<div class="modebtn on">📋 Transcript</div>' +
+					'<div class="modebtn" onclick="location.hash=\'s/' +
+					escapeHtml(String(gid)) +
+					"'\">🎙 Broadcast</div>" +
+					"</div>" +
 					'<div class="scorebug">' +
 					'<div class="tm"><div class="ab">' +
 					(home?.label ?? "?") +
@@ -327,6 +410,125 @@
 				window.scrollTo(0, 0);
 			}
 
+			const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+			async function showScript(gid) {
+				location.hash = "s/" + gid;
+				app.innerHTML = '<div class="loading">Loading broadcast…</div>';
+
+				// Fetch the script; if it doesn't exist yet, kick off generation
+				// and poll the job with a progress bar.
+				let res = await fetch(
+					"/api/broadcast/" + encodeURIComponent(gid) + "/script",
+				);
+				if (res.status === 404) {
+					await fetch("/api/broadcast/" + encodeURIComponent(gid) + "/script", {
+						method: "POST",
+					});
+					app.innerHTML =
+						'<div class="back" onclick="showGame(\'' +
+						gid +
+						"')\">← Transcript</div>" +
+						'<div class="genbar">Generating two-voice broadcast…<div class="track">' +
+						'<div class="fill" id="fill"></div></div>' +
+						'<div id="pct" style="margin-top:8px;font-size:12px"></div></div>';
+					const fill = document.getElementById("fill");
+					const pct = document.getElementById("pct");
+					for (;;) {
+						await sleep(2000);
+						let st;
+						try {
+							st = await (
+								await fetch(
+									"/api/broadcast/" +
+										encodeURIComponent(gid) +
+										"/script/status",
+								)
+							).json();
+						} catch {
+							continue;
+						}
+						if (st.total) {
+							const p = Math.round((st.done / st.total) * 100);
+							if (fill) fill.style.width = p + "%";
+							if (pct)
+								pct.textContent = st.done + " / " + st.total + " segments";
+						}
+						if (st.status === "done") break;
+						if (st.status === "error") {
+							app.innerHTML =
+								'<div class="empty">Generation failed: ' +
+								escapeHtml(st.error || "unknown") +
+								"</div>";
+							return;
+						}
+					}
+					res = await fetch(
+						"/api/broadcast/" + encodeURIComponent(gid) + "/script",
+					);
+				}
+
+				let s;
+				try {
+					s = await res.json();
+				} catch {
+					app.innerHTML =
+						'<div class="empty">Could not load the broadcast.</div>';
+					return;
+				}
+				const home = s.teams?.[0],
+					away = s.teams?.[1];
+				sub.textContent = (home?.abbrev ?? "") + " 🎙 " + (away?.abbrev ?? "");
+
+				let html =
+					'<div class="back" onclick="showGame(\'' +
+					gid +
+					"')\">← Transcript</div>" +
+					'<div class="modebar">' +
+					'<div class="modebtn" onclick="location.hash=\'g/' +
+					escapeHtml(String(gid)) +
+					"'\">📋 Transcript</div>" +
+					'<div class="modebtn on">🎙 Broadcast</div>' +
+					"</div>" +
+					'<div class="scorebug">' +
+					'<div class="tm"><div class="ab">' +
+					(home?.label ?? "?") +
+					'</div><div class="pt">' +
+					(s.finalScore?.[0] ?? "?") +
+					"</div></div>" +
+					'<div class="vs">FINAL</div>' +
+					'<div class="tm"><div class="ab">' +
+					(away?.label ?? "?") +
+					'</div><div class="pt">' +
+					(s.finalScore?.[1] ?? "?") +
+					"</div></div></div>";
+
+				for (const seg of s.segments) {
+					const q = seg.period > 4 ? "OT" : "Q" + seg.period;
+					html +=
+						'<div class="seghd">' +
+						q +
+						" &middot; " +
+						seg.scoreStart.join("–") +
+						" → " +
+						seg.scoreEnd.join("–") +
+						"</div>";
+					for (const u of seg.utterances) {
+						const who = u.voice === "pbp" ? "BREEN" : "CLYDE";
+						html +=
+							'<div class="utt ' +
+							u.voice +
+							'"><div class="who">' +
+							who +
+							'</div><div class="line">' +
+							escapeHtml(u.text) +
+							"</div></div>";
+					}
+				}
+				app.innerHTML = html;
+				window.scrollTo(0, 0);
+			}
+
 			function escapeHtml(s) {
 				return String(s).replace(
 					/[&<>"']/g,
@@ -343,8 +545,10 @@
 
 			// Route from hash so a refresh keeps you on the game.
 			function route() {
-				const m = location.hash.match(/^#g\/(.+)$/);
-				if (m) showGame(decodeURIComponent(m[1]));
+				const g = location.hash.match(/^#g\/(.+)$/);
+				const sc = location.hash.match(/^#s\/(.+)$/);
+				if (sc) showScript(decodeURIComponent(sc[1]));
+				else if (g) showGame(decodeURIComponent(g[1]));
 				else showList();
 			}
 			window.addEventListener("hashchange", route);
