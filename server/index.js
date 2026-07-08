@@ -24,6 +24,12 @@ import {
 	getBroadcast,
 	listBroadcasts,
 } from "./broadcast.js";
+import {
+	buildScript,
+	saveScript,
+	getScript,
+	hasScript,
+} from "./broadcast-script.js";
 import { runTurn, resetSession } from "./gm-session.js";
 import { ensureWorkdir, saveAttachments } from "./gm-workdir.js";
 import { randomUUID } from "node:crypto";
@@ -567,6 +573,79 @@ app.get("/api/broadcast/:gid", (req, res) => {
 // GET /broadcast → viewer UI
 app.get("/broadcast", (_req, res) => {
 	res.sendFile(path.join(__dirname, "public", "broadcast.html"));
+});
+
+// ── Radio broadcast Phase 2 — two-voice announcer script ────────────────────
+//
+// Script generation runs a local LLM over every segment of a game (2–3 min for
+// a full game), so it can't be a synchronous request. POST kicks off a
+// background job; the client polls the status endpoint; GET returns the cached
+// script when done. One job per game at a time; a finished script is cached on
+// disk and reused.
+const scriptJobs = new Map(); // gid -> { status, done, total, error, startedAt }
+
+async function runScriptJob(gid, broadcast) {
+	const job = { status: "running", done: 0, total: 0, error: null };
+	scriptJobs.set(String(gid), job);
+	try {
+		const script = await buildScript(broadcast, {
+			onProgress: ({ done, total }) => {
+				job.done = done;
+				job.total = total;
+			},
+		});
+		saveScript(script, Date.now());
+		job.status = "done";
+		console.log(
+			`[broadcast-script] gid=${gid} done — ${script.numSegments} segments, ` +
+				`${script.numUtterances} lines, ${script.llmFailures} fallback(s)`,
+		);
+	} catch (err) {
+		job.status = "error";
+		job.error = err.message;
+		console.error(`[broadcast-script] gid=${gid} job failed:`, err.message);
+	}
+}
+
+// POST /api/broadcast/:gid/script → start (or reuse) two-voice script generation.
+// ?force=1 regenerates even if a cached script exists.
+app.post("/api/broadcast/:gid/script", (req, res) => {
+	const gid = req.params.gid;
+	if (req.query.force !== "1" && hasScript(gid)) {
+		return res.json({ status: "done", cached: true });
+	}
+	const existing = scriptJobs.get(String(gid));
+	if (existing && existing.status === "running") {
+		return res.json({
+			status: "running",
+			done: existing.done,
+			total: existing.total,
+		});
+	}
+	const broadcast = getBroadcast(gid);
+	if (!broadcast) {
+		return res
+			.status(404)
+			.json({ error: "no broadcast transcript for that game" });
+	}
+	runScriptJob(gid, broadcast); // fire-and-forget
+	res.status(202).json({ status: "running", done: 0, total: 0 });
+});
+
+// GET /api/broadcast/:gid/script/status → poll job progress.
+app.get("/api/broadcast/:gid/script/status", (req, res) => {
+	const gid = req.params.gid;
+	const job = scriptJobs.get(String(gid));
+	if (job) return res.json(job);
+	if (hasScript(gid)) return res.json({ status: "done", done: 1, total: 1 });
+	res.json({ status: "none" });
+});
+
+// GET /api/broadcast/:gid/script → the finished two-voice script.
+app.get("/api/broadcast/:gid/script", (req, res) => {
+	const s = getScript(req.params.gid);
+	if (!s) return res.status(404).json({ error: "script not generated yet" });
+	res.json(s);
 });
 
 // ── Phase 2 animation spike — standalone Pixi.js viewer ─────────────────────
