@@ -78,56 +78,136 @@ const isMarker = (p) => p.type === "period" || p.type === "overtime";
 const quarterLabel = (period) =>
 	period > 4 ? (period === 5 ? "overtime" : `${period - 4}OT`) : `Q${period}`;
 
-// Walt "Clyde" Frazier's signature rhyming vocabulary. Each chunk is an
-// independent LLM call, so priming every one with the same few examples makes
-// the model parrot them game-wide ("dishing and swishing" 17x). We instead show
-// a ROTATING subset per chunk (by index) so different segments reach for
-// different phrases → variety across the whole broadcast.
-const CLYDE_ISMS = [
-	"dishing and swishing",
-	"posting and toasting",
-	"moving without improving",
-	"hustling and bustling",
-	"shaking and baking",
-	"wheeling and dealing",
-	"spinning and winning",
-	"slicing and dicing",
-	"stumbling and bumbling",
-	"huffing and stuffing",
-	"swooping and hooping",
-	"driving and diving",
-];
+// Walt "Clyde" Frazier's real signature rhymes, mapped to the play context each
+// one actually fits (sourced from his broadcast vocabulary). Instead of randomly
+// rotating a flat list, we hand the model this play→phrase guide and tell it to
+// pick the rhyme that MATCHES the action — "posting and toasting" on a post score,
+// "stumbling and bumbling" on a turnover — so variety comes from play variety.
+const CLYDE_CONTEXT_GUIDE = [
+	["an assisted basket or crisp passing", "dishing and swishing"],
+	["a low-post score", "posting and toasting"],
+	["a drive or finish at the rim", "driving and thriving / slicing and dicing"],
+	["a rebound", "bounding and astounding / hustle and muscle"],
+	["a turnover or sloppy possession", "stumbling and bumbling"],
+	["a steal", "wheeling, dealing and stealing"],
+	[
+		"a forced miss or bad shot",
+		"chucking and sucking / moving without improving",
+	],
+	["a hard foul", "hacking and lip smacking"],
+]
+	.map(([context, ism]) => `  - on ${context} → "${ism}"`)
+	.join("\n");
 
-function clydePalette(chunkIndex) {
-	const n = CLYDE_ISMS.length;
-	return [0, 1, 2].map((k) => CLYDE_ISMS[(chunkIndex * 3 + k) % n]);
+// Well-known NBA nicknames, keyed by FULL name (last-name-only keys would
+// misfire on the many Johnsons/Malones/Robinsons a random league can generate).
+// Injected into a chunk's prompt only when that exact player appears, so the
+// announcers can drop "the Dream" / "MJ" / "Nique" for the stars — sparingly.
+const STAR_NICKNAMES = {
+	"Michael Jordan": ["MJ", "Air Jordan", "His Airness"],
+	"Magic Johnson": ["Magic"],
+	"Earvin Johnson": ["Magic"],
+	"Dominique Wilkins": ["Nique", "the Human Highlight Reel"],
+	"Hakeem Olajuwon": ["the Dream"],
+	"Akeem Olajuwon": ["the Dream"],
+	"Karl Malone": ["the Mailman"],
+	"Larry Bird": ["Larry Legend"],
+	"Charles Barkley": ["Sir Charles", "the Round Mound of Rebound"],
+	"Patrick Ewing": ["the Big Fella"],
+	"David Robinson": ["the Admiral"],
+	"Isiah Thomas": ["Zeke"],
+	"Shaquille O'Neal": ["Shaq", "the Diesel"],
+	"Kobe Bryant": ["the Black Mamba"],
+	"Tim Duncan": ["the Big Fundamental"],
+	"Kevin Garnett": ["KG", "the Big Ticket"],
+	"Allen Iverson": ["AI", "the Answer"],
+	"Julius Erving": ["Dr. J"],
+	"Earl Monroe": ["the Pearl"],
+	"George Gervin": ["the Iceman"],
+	"Wilt Chamberlain": ["Wilt the Stilt", "the Big Dipper"],
+	"Kareem Abdul-Jabbar": ["Cap", "the Captain"],
+	"Dennis Rodman": ["the Worm"],
+	"Reggie Miller": ["the Knick Killer"],
+	"Anfernee Hardaway": ["Penny"],
+	"Kevin Durant": ["KD", "the Slim Reaper"],
+	"LeBron James": ["King James", "the King"],
+	"Stephen Curry": ["Steph", "the Baby-Faced Assassin"],
+	"Giannis Antetokounmpo": ["the Greek Freak"],
+};
+
+// Nickname hint lines for the stars that actually appear in this chunk's plays.
+function starNicksInChunk(chunk) {
+	const text = chunk.plays.map((p) => p.text).join(" ");
+	const out = [];
+	for (const [full, nicks] of Object.entries(STAR_NICKNAMES)) {
+		if (text.includes(full)) {
+			out.push(`  - ${full} → "${nicks.join('" or "')}"`);
+		}
+	}
+	return out.join("\n");
+}
+
+// Collect the "First Last" player names appearing in a chunk's play text and
+// map each to its last name. A prompt instruction alone won't stop the model
+// mirroring the transcript's full names, so we shorten the fed play text to last
+// names deterministically (below) and hand back the full-name list for the
+// occasional expansion. Longest-first so multi-word names replace cleanly.
+function chunkNameMap(chunk) {
+	const set = new Set();
+	const re = /\b[A-Z][a-z]+ [A-Z][a-z'’.\-]+\b/g;
+	for (const p of chunk.plays) {
+		const matches = p.text.match(re);
+		if (matches) for (const m of matches) set.add(m);
+	}
+	return [...set]
+		.sort((a, b) => b.length - a.length)
+		.map((full) => [full, full.split(" ").pop()]);
+}
+
+function shortenNames(text, nameMap) {
+	let out = text;
+	for (const [full, last] of nameMap) out = out.split(full).join(last);
+	return out;
 }
 
 // ── Prompt ────────────────────────────────────────────────────────────────
 
-function buildChunkPrompt(chunk, ctx, chunkIndex) {
+function buildChunkPrompt(chunk, ctx) {
 	const [home, away] = ctx.teamLabels;
 	const [ha, aa] = ctx.teamAbbrevs;
 	// Ground every play with the running score so any score the announcer states
 	// is correct — the model must never invent numbers. The (score: …) tag is a
 	// reference only; the parser also strips it in case the model echoes it.
+	// Play text is shortened to LAST NAMES so the model's default is last-name.
+	const nameMap = chunkNameMap(chunk);
 	const lines = chunk.plays
 		.filter((p) => !isMarker(p))
 		.map(
 			(p, i) =>
-				`${i + 1}. [${p.clock ?? ""}] ${p.text} (score: ${ha} ${p.score?.[0] ?? "?"}, ${aa} ${p.score?.[1] ?? "?"})`,
+				`${i + 1}. [${p.clock ?? ""}] ${shortenNames(p.text, nameMap)} (score: ${ha} ${p.score?.[0] ?? "?"}, ${aa} ${p.score?.[1] ?? "?"})`,
 		)
 		.join("\n");
 	const ql = quarterLabel(chunk.period);
 	const closer = chunk.endsPeriod
 		? `\nThis segment ENDS ${ql}. Close it out with BREEN reading the exact score: ${home} ${chunk.scoreEnd[0]}, ${away} ${chunk.scoreEnd[1]}.`
 		: "";
-	const isms = clydePalette(chunkIndex);
+	const nicks = starNicksInChunk(chunk);
+	const nickBlock = nicks
+		? `\nWell-known nicknames you MAY use (occasionally, for these stars only):\n${nicks}\n`
+		: "";
+	// Full names available for the occasional expansion (default stays last-name).
+	const roster = nameMap.map(([full]) => full).join(", ");
+	const rosterBlock = roster
+		? `\nFull names (the plays use last names — expand to a full name only now and then, for a star's first mention or emphasis): ${roster}\n`
+		: "";
 
 	return `You are scripting a live NBA radio broadcast with TWO announcers:
 - BREEN: the play-by-play voice, in the style of Mike Breen. Crisp, energetic, calls the action as it happens. Says "Bang!" on a big three-pointer. States the score at natural breaks.
-- CLYDE: the color analyst, in the style of Walt "Clyde" Frazier. He chimes in after the notable moments — a three, a big finish, a block, a turnover, a scoring run — but stays quiet through routine possessions. Aim for one Clyde line for every two or three of Breen's calls. Each line is concrete analysis of that moment, occasionally seasoned with a signature rhyme (e.g. "${isms[0]}", "${isms[1]}", "${isms[2]}"). Use those rhymes sparingly and never the same one twice; never tack on a stock tag like "that's the way to go".
+- CLYDE: the color analyst, in the style of Walt "Clyde" Frazier. He chimes in after the notable moments — a three, a big finish, a block, a turnover, a scoring run — but stays quiet through routine possessions. Aim for one Clyde line for every two or three of Breen's calls. Each line is concrete analysis of that moment, occasionally seasoned with a signature rhyme that FITS the play:
+${CLYDE_CONTEXT_GUIDE}
+  Use a rhyme only when it matches the action, sparingly, and never the same rhyme twice. Never tack on a stock tag like "that's the way to go".
 
+NAMES: the plays below already use last names — keep it that way by default. Expand to a full name or drop in a nickname only occasionally, for variety — not every line.${nickBlock}${rosterBlock}
 Game: ${home} (home) vs ${away} (away). Segment: ${ql}. Score entering this segment — ${home} ${chunk.scoreStart[0]}, ${away} ${chunk.scoreStart[1]}.
 
 Call these plays IN ORDER. Reference ONLY the players and events listed below — invent no players or storylines. State ONLY the scores shown in parentheses; never make up a number. The "(score: …)" tags are for YOUR reference only — NEVER write them in your output:
@@ -251,7 +331,7 @@ export async function buildScript(broadcast, opts = {}) {
 		const chunk = chunks[i];
 		let utterances;
 		try {
-			const raw = await callOllama(buildChunkPrompt(chunk, ctx, i));
+			const raw = await callOllama(buildChunkPrompt(chunk, ctx));
 			utterances = thinColor(parseTwoVoice(raw));
 			if (!utterances.length) {
 				utterances = fallbackUtterances(chunk);
