@@ -211,7 +211,10 @@ export function buildBroadcast(gameStart) {
 	const events = Array.isArray(gameStart?.events) ? gameStart.events : [];
 
 	const score = [0, 0];
-	let period = 0;
+	// BBGM emits a "period" marker only at the START of Q2/Q3/Q4 (and OT) — the
+	// game tips off in Q1 with no marker, so seed at 1, not 0. The first "period"
+	// event (start of Q2, e.period=2) then sets it correctly.
+	let period = 1;
 	const plays = [];
 
 	for (const e of events) {

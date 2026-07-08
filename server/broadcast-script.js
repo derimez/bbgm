@@ -78,13 +78,39 @@ const isMarker = (p) => p.type === "period" || p.type === "overtime";
 const quarterLabel = (period) =>
 	period > 4 ? (period === 5 ? "overtime" : `${period - 4}OT`) : `Q${period}`;
 
+// Walt "Clyde" Frazier's signature rhyming vocabulary. Each chunk is an
+// independent LLM call, so priming every one with the same few examples makes
+// the model parrot them game-wide ("dishing and swishing" 17x). We instead show
+// a ROTATING subset per chunk (by index) so different segments reach for
+// different phrases → variety across the whole broadcast.
+const CLYDE_ISMS = [
+	"dishing and swishing",
+	"posting and toasting",
+	"moving without improving",
+	"hustling and bustling",
+	"shaking and baking",
+	"wheeling and dealing",
+	"spinning and winning",
+	"slicing and dicing",
+	"stumbling and bumbling",
+	"huffing and stuffing",
+	"swooping and hooping",
+	"driving and diving",
+];
+
+function clydePalette(chunkIndex) {
+	const n = CLYDE_ISMS.length;
+	return [0, 1, 2].map((k) => CLYDE_ISMS[(chunkIndex * 3 + k) % n]);
+}
+
 // ── Prompt ────────────────────────────────────────────────────────────────
 
-function buildChunkPrompt(chunk, ctx) {
+function buildChunkPrompt(chunk, ctx, chunkIndex) {
 	const [home, away] = ctx.teamLabels;
 	const [ha, aa] = ctx.teamAbbrevs;
 	// Ground every play with the running score so any score the announcer states
-	// is correct — the model must never invent numbers.
+	// is correct — the model must never invent numbers. The (score: …) tag is a
+	// reference only; the parser also strips it in case the model echoes it.
 	const lines = chunk.plays
 		.filter((p) => !isMarker(p))
 		.map(
@@ -96,17 +122,18 @@ function buildChunkPrompt(chunk, ctx) {
 	const closer = chunk.endsPeriod
 		? `\nThis segment ENDS ${ql}. Close it out with BREEN reading the exact score: ${home} ${chunk.scoreEnd[0]}, ${away} ${chunk.scoreEnd[1]}.`
 		: "";
+	const isms = clydePalette(chunkIndex);
 
 	return `You are scripting a live NBA radio broadcast with TWO announcers:
 - BREEN: the play-by-play voice, in the style of Mike Breen. Crisp, energetic, calls the action as it happens. Says "Bang!" on a big three-pointer. States the score at natural breaks.
-- CLYDE: the color analyst, in the style of Walt "Clyde" Frazier. Chimes in occasionally with vivid, rhyming flair ("dishing and swishing", "posting and toasting", "moving without improving") and quick analysis. Clyde does NOT talk on every play.
+- CLYDE: the color analyst, in the style of Walt "Clyde" Frazier. He chimes in after the notable moments — a three, a big finish, a block, a turnover, a scoring run — but stays quiet through routine possessions. Aim for one Clyde line for every two or three of Breen's calls. Each line is concrete analysis of that moment, occasionally seasoned with a signature rhyme (e.g. "${isms[0]}", "${isms[1]}", "${isms[2]}"). Use those rhymes sparingly and never the same one twice; never tack on a stock tag like "that's the way to go".
 
 Game: ${home} (home) vs ${away} (away). Segment: ${ql}. Score entering this segment — ${home} ${chunk.scoreStart[0]}, ${away} ${chunk.scoreStart[1]}.
 
-Call these plays IN ORDER. Reference ONLY the players and events listed below — invent no players or storylines. State ONLY the scores shown in parentheses; never make up a number:
+Call these plays IN ORDER. Reference ONLY the players and events listed below — invent no players or storylines. State ONLY the scores shown in parentheses; never make up a number. The "(score: …)" tags are for YOUR reference only — NEVER write them in your output:
 ${lines}${closer}
 
-Output ONLY announcer lines, one per line, each beginning with "BREEN:" or "CLYDE:". BREEN carries the play-by-play for every play; CLYDE speaks only occasionally — at most one color line for every three of BREEN's, and never twice in a row. No stage directions, no blank lines, no headers, no other text.`;
+Output ONLY announcer lines, one per line, each beginning with "BREEN:" or "CLYDE:". BREEN carries the play-by-play for every play; MOST plays get a BREEN call with NO Clyde line. CLYDE speaks at most once per three BREEN calls, and never twice in a row. Vary Clyde's phrasing — do not repeat yourself. No stage directions, no blank lines, no headers, no other text.`;
 }
 
 // ── Parsing ────────────────────────────────────────────────────────────────
@@ -130,10 +157,35 @@ function parseTwoVoice(raw) {
 		);
 		if (!m) continue;
 		const voice = VOICE_BY_TAG[m[1].toUpperCase()];
-		const text = m[2].replace(/^["“']+|["”']+$/g, "").trim();
+		// Strip any echoed "(score: IND 0, NYK 2)" grounding tag and wrapping
+		// quotes — those are prompt scaffolding, not something to speak aloud.
+		const text = m[2]
+			.replace(/\s*\(score:[^)]*\)/gi, "")
+			.replace(/^["“']+|["”']+$/g, "")
+			.trim();
 		if (voice && text) utts.push({ voice, text });
 	}
 	return utts;
+}
+
+// Enforce color sparsity structurally, independent of model compliance: allow a
+// CLYDE line only once enough BREEN calls have accumulated (≤ ~1 color per 3
+// pbp), preserving order. This also spaces them out, so a chatty model can't
+// produce a 1:1 back-and-forth. Extra color lines are dropped, not reordered.
+function thinColor(utts) {
+	let pbp = 0;
+	let color = 0;
+	const out = [];
+	for (const u of utts) {
+		if (u.voice === "pbp") {
+			pbp++;
+			out.push(u);
+		} else if (color < Math.floor(pbp / 3)) {
+			color++;
+			out.push(u);
+		}
+	}
+	return out;
 }
 
 // Deterministic degrade: one PBP utterance per real play. Never loses a segment.
@@ -199,8 +251,8 @@ export async function buildScript(broadcast, opts = {}) {
 		const chunk = chunks[i];
 		let utterances;
 		try {
-			const raw = await callOllama(buildChunkPrompt(chunk, ctx));
-			utterances = parseTwoVoice(raw);
+			const raw = await callOllama(buildChunkPrompt(chunk, ctx, i));
+			utterances = thinColor(parseTwoVoice(raw));
 			if (!utterances.length) {
 				utterances = fallbackUtterances(chunk);
 				llmFailures++;
