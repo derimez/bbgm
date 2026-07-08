@@ -18,7 +18,13 @@ import {
 	listRecaps,
 } from "./db.js";
 import { tallyBoxScore, generateRecap } from "./recap.js";
-import { runTurn } from "./gm-session.js";
+import {
+	buildBroadcast,
+	saveBroadcast,
+	getBroadcast,
+	listBroadcasts,
+} from "./broadcast.js";
+import { runTurn, resetSession } from "./gm-session.js";
 import { ensureWorkdir, saveAttachments } from "./gm-workdir.js";
 import { randomUUID } from "node:crypto";
 
@@ -381,6 +387,25 @@ app.post("/api/sim-game-start", (req, res) => {
 	recentEvents.length = 0;
 	gameEventLog = [];
 	broadcast({ kind: "gameStart", ...lastGameStart });
+
+	// Radio broadcast — the gameStart packet carries the ENTIRE game's event list
+	// up front (BBGM ships it at the `init` event), so we can build and persist a
+	// complete, self-contained transcript immediately — no playback, no dependency
+	// on the live /simcast viewer. Best-effort: a capture failure must never break
+	// the sim/simcast pipeline.
+	try {
+		if (lastGameStart.gid != null && lastGameStart.events.length > 0) {
+			const transcript = buildBroadcast(lastGameStart);
+			saveBroadcast(transcript, Date.now());
+			console.log(
+				`[broadcast] gid=${lastGameStart.gid} captured ${transcript.numPlays} plays ` +
+					`(${transcript.teams[0]?.abbrev} ${transcript.finalScore[0]}-${transcript.finalScore[1]} ${transcript.teams[1]?.abbrev})`,
+			);
+		}
+	} catch (err) {
+		console.error(`[broadcast] capture failed:`, err.message);
+	}
+
 	res.json({ ok: true });
 });
 
@@ -503,6 +528,45 @@ app.get("/api/recap/:gid", (req, res) => {
 // GET /recaps  → browse-back UI
 app.get("/recaps", (_req, res) => {
 	res.sendFile(path.join(__dirname, "public", "recaps.html"));
+});
+
+// ── Radio broadcast — captured game transcripts ─────────────────────────────
+
+// GET /api/broadcasts → list of captured games (most recent first).
+// ?safe=1 returns a SPOILER-SAFE projection: matchup + date only, with score,
+// winner, and play-count stripped (play-count leaks OT / a close finish). The
+// in-app picker always uses safe=1 so you can pick a game to listen to without
+// learning the result first.
+app.get("/api/broadcasts", (req, res) => {
+	const list = listBroadcasts();
+	if (req.query.safe === "1") {
+		return res.json(
+			list.map((b) => ({
+				gid: b.gid,
+				season: b.season,
+				day: b.day,
+				generatedAt: b.generatedAt,
+				teams: b.teams?.map((t) => ({
+					tid: t.tid,
+					abbrev: t.abbrev,
+					label: t.label,
+				})),
+			})),
+		);
+	}
+	res.json(list);
+});
+
+// GET /api/broadcast/:gid → one full transcript (teams + plays)
+app.get("/api/broadcast/:gid", (req, res) => {
+	const b = getBroadcast(req.params.gid);
+	if (!b) return res.status(404).json({ error: "no broadcast for that game" });
+	res.json(b);
+});
+
+// GET /broadcast → viewer UI
+app.get("/broadcast", (_req, res) => {
+	res.sendFile(path.join(__dirname, "public", "broadcast.html"));
 });
 
 // ── Phase 2 animation spike — standalone Pixi.js viewer ─────────────────────

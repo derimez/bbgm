@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta
+			name="viewport"
+			content="width=device-width, initial-scale=1, viewport-fit=cover"
+		/>
+		<title>Radio Broadcast — BBGM</title>
+		<style>
+			:root {
+				--bg: #0b0e11;
+				--panel: #151a20;
+				--panel2: #1c232b;
+				--line: #2a323c;
+				--text: #e7edf3;
+				--muted: #8a97a6;
+				--accent: #ff8a3d;
+				--home: #4da3ff;
+				--away: #ff6b6b;
+			}
+			* {
+				box-sizing: border-box;
+			}
+			html,
+			body {
+				margin: 0;
+				background: var(--bg);
+				color: var(--text);
+				font:
+					15px/1.5 -apple-system,
+					BlinkMacSystemFont,
+					"Segoe UI",
+					Roboto,
+					sans-serif;
+			}
+			header {
+				position: sticky;
+				top: 0;
+				background: linear-gradient(180deg, #10161d, #0b0e11);
+				border-bottom: 1px solid var(--line);
+				padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0)) 16px;
+				display: flex;
+				align-items: center;
+				gap: 10px;
+				z-index: 5;
+			}
+			header .dot {
+				width: 10px;
+				height: 10px;
+				border-radius: 50%;
+				background: var(--accent);
+				box-shadow: 0 0 10px var(--accent);
+			}
+			header h1 {
+				font-size: 17px;
+				margin: 0;
+				font-weight: 700;
+				letter-spacing: 0.2px;
+			}
+			header .sub {
+				color: var(--muted);
+				font-size: 12px;
+				margin-left: auto;
+			}
+			.wrap {
+				max-width: 760px;
+				margin: 0 auto;
+				padding: 16px;
+			}
+			.card {
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 12px;
+				padding: 14px 16px;
+				margin-bottom: 12px;
+				cursor: pointer;
+				transition:
+					border-color 0.15s,
+					transform 0.05s;
+			}
+			.card:hover {
+				border-color: var(--accent);
+			}
+			.card:active {
+				transform: scale(0.995);
+			}
+			.card .teams {
+				font-weight: 700;
+				font-size: 16px;
+			}
+			.card .meta {
+				color: var(--muted);
+				font-size: 12px;
+				margin-top: 4px;
+			}
+			.card .score {
+				float: right;
+				font-variant-numeric: tabular-nums;
+				color: var(--accent);
+				font-weight: 700;
+			}
+			.empty {
+				color: var(--muted);
+				text-align: center;
+				padding: 48px 16px;
+			}
+			.empty code {
+				color: var(--accent);
+				background: var(--panel2);
+				padding: 2px 6px;
+				border-radius: 5px;
+			}
+			.back {
+				color: var(--accent);
+				cursor: pointer;
+				font-size: 14px;
+				display: inline-flex;
+				align-items: center;
+				gap: 6px;
+				margin-bottom: 12px;
+			}
+			.scorebug {
+				display: flex;
+				align-items: center;
+				justify-content: center;
+				gap: 18px;
+				background: var(--panel);
+				border: 1px solid var(--line);
+				border-radius: 12px;
+				padding: 14px;
+				margin-bottom: 16px;
+				font-variant-numeric: tabular-nums;
+			}
+			.scorebug .tm {
+				text-align: center;
+			}
+			.scorebug .tm .ab {
+				font-size: 12px;
+				color: var(--muted);
+			}
+			.scorebug .tm .pt {
+				font-size: 30px;
+				font-weight: 800;
+			}
+			.scorebug .vs {
+				color: var(--muted);
+				font-size: 12px;
+			}
+			.play {
+				display: grid;
+				grid-template-columns: 58px 1fr auto;
+				gap: 10px;
+				padding: 8px 10px;
+				border-bottom: 1px solid #1a2027;
+				align-items: baseline;
+			}
+			.play.qbreak {
+				background: var(--panel2);
+				border-radius: 8px;
+				margin: 8px 0;
+				font-weight: 700;
+			}
+			.play .clk {
+				color: var(--muted);
+				font-size: 12px;
+				font-variant-numeric: tabular-nums;
+			}
+			.play .txt {
+			}
+			.play .sc {
+				color: var(--muted);
+				font-size: 12px;
+				font-variant-numeric: tabular-nums;
+				white-space: nowrap;
+			}
+			.play.score-home .txt {
+				color: var(--home);
+			}
+			.play.score-away .txt {
+				color: var(--away);
+			}
+			.loading {
+				color: var(--muted);
+				text-align: center;
+				padding: 40px;
+			}
+		</style>
+	</head>
+	<body>
+		<header>
+			<span class="dot"></span>
+			<h1>Radio Broadcast</h1>
+			<span class="sub" id="sub">game transcripts</span>
+		</header>
+		<div class="wrap" id="app"><div class="loading">Loading…</div></div>
+
+		<script>
+			const app = document.getElementById("app");
+			const sub = document.getElementById("sub");
+
+			const fmtDate = (ts) =>
+				ts
+					? new Date(ts).toLocaleString(undefined, {
+							month: "short",
+							day: "numeric",
+							hour: "numeric",
+							minute: "2-digit",
+						})
+					: "";
+
+			async function showList() {
+				sub.textContent = "game transcripts";
+				location.hash = "";
+				app.innerHTML = '<div class="loading">Loading…</div>';
+				let list;
+				try {
+					list = await (await fetch("/api/broadcasts")).json();
+				} catch {
+					app.innerHTML =
+						'<div class="empty">Could not reach the server.</div>';
+					return;
+				}
+				if (!list.length) {
+					app.innerHTML =
+						'<div class="empty">No broadcasts captured yet.<br><br>' +
+						"Open <code>Watch Live</code> on any game in BBGM — the full transcript is captured automatically, " +
+						"and it will appear here.</div>";
+					return;
+				}
+				app.innerHTML = list
+					.map((b) => {
+						const home = b.teams?.[0],
+							away = b.teams?.[1];
+						return (
+							'<div class="card" data-gid="' +
+							escapeHtml(String(b.gid)) +
+							'">' +
+							'<span class="score">' +
+							(b.finalScore?.[0] ?? "?") +
+							"–" +
+							(b.finalScore?.[1] ?? "?") +
+							"</span>" +
+							'<div class="teams">' +
+							escapeHtml(home?.label ?? "?") +
+							" vs " +
+							escapeHtml(away?.label ?? "?") +
+							"</div>" +
+							'<div class="meta">' +
+							(b.season ? "Season " + b.season + " · " : "") +
+							(b.numPlays ?? 0) +
+							" plays · " +
+							fmtDate(b.generatedAt) +
+							"</div></div>"
+						);
+					})
+					.join("");
+			}
+
+			// Event delegation — avoids fragile inline onclick string-escaping.
+			app.addEventListener("click", (e) => {
+				const card = e.target.closest(".card[data-gid]");
+				if (card) showGame(card.dataset.gid);
+			});
+
+			async function showGame(gid) {
+				location.hash = "g/" + gid;
+				app.innerHTML = '<div class="loading">Loading transcript…</div>';
+				let b;
+				try {
+					b = await (
+						await fetch("/api/broadcast/" + encodeURIComponent(gid))
+					).json();
+				} catch {
+					app.innerHTML =
+						'<div class="empty">Could not load that transcript.</div>';
+					return;
+				}
+				const home = b.teams?.[0],
+					away = b.teams?.[1];
+				sub.textContent = (home?.abbrev ?? "") + " vs " + (away?.abbrev ?? "");
+
+				let html =
+					'<div class="back" onclick="showList()">← All broadcasts</div>' +
+					'<div class="scorebug">' +
+					'<div class="tm"><div class="ab">' +
+					(home?.label ?? "?") +
+					'</div><div class="pt">' +
+					(b.finalScore?.[0] ?? "?") +
+					"</div></div>" +
+					'<div class="vs">FINAL</div>' +
+					'<div class="tm"><div class="ab">' +
+					(away?.label ?? "?") +
+					'</div><div class="pt">' +
+					(b.finalScore?.[1] ?? "?") +
+					"</div></div>" +
+					"</div>";
+
+				let prev = [0, 0];
+				for (const p of b.plays) {
+					const isBreak = p.type === "period" || p.type === "overtime";
+					let cls = "play";
+					if (isBreak) cls += " qbreak";
+					// Highlight the line that actually put points on the board, colored
+					// by which side scored — robust vs. guessing from the text.
+					if (p.score) {
+						if (p.score[0] > prev[0]) cls += " score-home";
+						else if (p.score[1] > prev[1]) cls += " score-away";
+						prev = p.score;
+					}
+					html +=
+						'<div class="' +
+						cls +
+						'">' +
+						'<div class="clk">' +
+						(isBreak ? "" : (p.clock ?? "")) +
+						"</div>" +
+						'<div class="txt">' +
+						escapeHtml(p.text) +
+						"</div>" +
+						'<div class="sc">' +
+						(isBreak ? "" : p.score?.[0] + "–" + p.score?.[1]) +
+						"</div>" +
+						"</div>";
+				}
+				app.innerHTML = html;
+				window.scrollTo(0, 0);
+			}
+
+			function escapeHtml(s) {
+				return String(s).replace(
+					/[&<>"']/g,
+					(c) =>
+						({
+							"&": "&amp;",
+							"<": "&lt;",
+							">": "&gt;",
+							'"': "&quot;",
+							"'": "&#39;",
+						})[c],
+				);
+			}
+
+			// Route from hash so a refresh keeps you on the game.
+			function route() {
+				const m = location.hash.match(/^#g\/(.+)$/);
+				if (m) showGame(decodeURIComponent(m[1]));
+				else showList();
+			}
+			window.addEventListener("hashchange", route);
+			route();
+		</script>
+	</body>
+</html>
