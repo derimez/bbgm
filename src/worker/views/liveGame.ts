@@ -1,4 +1,6 @@
 import { player, team } from "../core/index.ts";
+import { gameSimToBoxScore } from "../core/game/writeGameStats.ts";
+import { peekStashedLiveResult } from "../core/game/liveSimStash.ts";
 import { idb } from "../db/index.ts";
 import { g, helpers } from "../util/index.ts";
 import {
@@ -194,7 +196,20 @@ const updatePlayByPlay = async (
 		inputs.playByPlay !== undefined &&
 		inputs.playByPlay.length > 0
 	) {
-		const boxScore = await idb.getCopy.games({ gid: inputs.gid });
+		let boxScore = await idb.getCopy.games({ gid: inputs.gid });
+
+		if (!boxScore) {
+			// A live game in progress isn't in the `games` store yet — coach mode
+			// defers that write to finalizeLiveGame so a mid-game coaching re-sim
+			// can supersede the original before anything persists. Build the box
+			// score from the stashed sim result instead (same object writeGameStats
+			// would store). att is a placeholder for the transient live display; the
+			// real attendance is written when the game finalizes.
+			const stashedResult = peekStashedLiveResult(inputs.gid);
+			if (stashedResult) {
+				({ gameStats: boxScore } = await gameSimToBoxScore(stashedResult, 0));
+			}
+		}
 
 		if (!boxScore) {
 			throw new Error("Invalid gid");

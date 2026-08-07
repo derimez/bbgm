@@ -1,0 +1,17 @@
+{
+	"_note": "Single source of truth for cloned-voice params. Used by chatterbox_tts.py (game render) and the AGM speak endpoint. exaggeration=emotion intensity (0.3 calm .. 0.9 hot); cfg_weight=pacing/adherence (lower=slower/more deliberate). Refs relative to server/tts/. pbp=Breen (podcast clip), color=Clyde (blended Rhyme-Time + FOX5 interview). hypeBoost adds to pbp exaggeration on big calls (BANG/dunks/buzzer-beaters) — see chatterbox_tts.py.",
+	"voices": {
+		"pbp": {
+			"ref": "refs/breen_pod.wav",
+			"exaggeration": 0.85,
+			"cfg_weight": 0.35,
+			"hypeBoost": 0.1,
+			"hypeMax": 0.95
+		},
+		"color": {
+			"ref": "refs/clyde_blend.wav",
+			"exaggeration": 0.6,
+			"cfg_weight": 0.5
+		}
+	}
+}

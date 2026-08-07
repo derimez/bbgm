@@ -2,6 +2,7 @@ import express from "express";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 import path from "node:path";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import {
 	saveSnapshot,
@@ -9,6 +10,7 @@ import {
 	listLeagues,
 	getSnapshotHistory,
 	saveSnapshotV2,
+	boxScoresFileFor,
 	getLatestBySyncId,
 	getSyncMeta,
 	listSyncLeagues,
@@ -29,7 +31,24 @@ import {
 	saveScript,
 	getScript,
 	hasScript,
+	scriptFile,
 } from "./broadcast-script.js";
+import {
+	renderAudio,
+	hasAudio,
+	getManifest,
+	resolveAudioPath,
+	renderText,
+	cachedTextPath,
+	TTS_ENABLED,
+} from "./broadcast-audio.js";
+import {
+	enqueue,
+	queueState,
+	resetBreaker,
+	QueueFullError,
+	BreakerOpenError,
+} from "./gpu-queue.js";
 import { runTurn, resetSession } from "./gm-session.js";
 import { ensureWorkdir, saveAttachments } from "./gm-workdir.js";
 import { randomUUID } from "node:crypto";
@@ -203,11 +222,40 @@ app.get("/api/v2/meta/:syncId", (req, res) => {
 });
 
 // GET /api/v2/pull/:syncId → raw league JSON for createLeague({url}) import
+//
+// The stored snapshot has its `games` store split out (see splitBoxScores in
+// db.js — keeps the 30-deep snapshot history lean). But BBGM's own import path
+// computes maxGid by scanning `games` in the incoming stream (see "Need to
+// store max gid from games, so generated schedule does not overwrite it" in
+// leagueFileUpload.ts) — if games is absent, maxGid falls back to -1 and the
+// importer renumbers every schedule entry starting near 0, colliding with
+// real early-season game ids and losing all box score history on the
+// receiving device. So a pull specifically (unlike the stored snapshot) must
+// merge games back in before serving.
 app.get("/api/v2/pull/:syncId", (req, res) => {
 	const row = getLatestBySyncId(req.params.syncId);
 	if (!row) return res.status(404).json({ error: "no snapshot for syncId" });
+
+	let payload = row.data;
+	try {
+		const boxScoresPath = boxScoresFileFor(req.params.syncId);
+		if (fs.existsSync(boxScoresPath)) {
+			const games = JSON.parse(fs.readFileSync(boxScoresPath, "utf8"));
+			const league = JSON.parse(row.data);
+			league.games = games;
+			payload = JSON.stringify(league);
+		}
+	} catch (err) {
+		console.error(
+			`[pull] failed to merge box scores for ${req.params.syncId}:`,
+			err.message,
+		);
+		// Fall through and serve without games rather than fail the pull outright —
+		// same degraded (but at least functional for stats/roster) behavior as before this fix.
+	}
+
 	res.setHeader("Content-Type", "application/json");
-	res.send(row.data);
+	res.send(payload);
 });
 
 // GET /api/v2/leagues → all known synced leagues (for a pull-picker UI)
@@ -290,8 +338,24 @@ app.post("/api/gm/chat", (req, res) => {
 	}
 
 	const turnId = randomUUID();
-	gmTurns.set(turnId, { status: "pending", ts: Date.now() });
+	// `steps` accumulates the GM's live thinking / tool activity so the client can
+	// render it as it happens (polled), the way the Claude app streams its work.
+	gmTurns.set(turnId, { status: "pending", ts: Date.now(), steps: [] });
 	pruneGmTurns();
+
+	// Keep the timeline bounded — a long tool-heavy turn shouldn't grow unbounded.
+	const MAX_STEPS = 400;
+	const clip = (s) => (s.length > 4000 ? `${s.slice(0, 4000)}…` : s);
+	const onEvent = (ev) => {
+		const rec = gmTurns.get(turnId);
+		if (!rec || !Array.isArray(rec.steps) || rec.steps.length >= MAX_STEPS)
+			return;
+		if (ev.kind === "tool") {
+			rec.steps.push({ kind: "tool", name: ev.name, summary: ev.summary });
+		} else if (ev.kind === "thinking" || ev.kind === "text") {
+			rec.steps.push({ kind: ev.kind, text: clip(ev.text) });
+		}
+	};
 
 	const startTime = Date.now();
 	console.log(
@@ -300,20 +364,34 @@ app.post("/api/gm/chat", (req, res) => {
 
 	(async () => {
 		try {
-			const turn = await runTurn(syncId, promptForGm, dir);
+			const turn = await runTurn(syncId, promptForGm, dir, onEvent);
 			const reply = (turn.result || "").trim() || "(no response)";
 			console.log(
 				`[gm] turn=${turnId.slice(0, 8)} done in ${Date.now() - startTime}ms`,
 			);
-			gmTurns.set(turnId, { status: "done", reply, ts: Date.now() });
+			const prev = gmTurns.get(turnId);
+			gmTurns.set(turnId, {
+				status: "done",
+				reply,
+				// isNew === true means runTurn spawned a *fresh* Claude session for
+				// this turn (the prior --resume thread was gone — reset, timeout, or
+				// a server restart). The client uses it to flag that the model can't
+				// see the conversation above, so the visible transcript and the
+				// model's memory don't silently diverge.
+				isNew: turn.isNew === true,
+				steps: prev?.steps || [],
+				ts: Date.now(),
+			});
 		} catch (err) {
 			console.error(`[gm] turn=${turnId.slice(0, 8)} error:`, err.message);
 			const timedOut = err.timedOut || /timeout/i.test(err.message || "");
+			const prev = gmTurns.get(turnId);
 			gmTurns.set(turnId, {
 				status: "error",
 				error: timedOut
 					? "That took too long and the session was reset — please try again."
 					: `GM chat failed: ${(err.message || "unknown").slice(0, 200)}`,
+				steps: prev?.steps || [],
 				ts: Date.now(),
 			});
 		}
@@ -327,11 +405,35 @@ app.get("/api/gm/chat/result/:turnId", (req, res) => {
 	pruneGmTurns();
 	const t = gmTurns.get(req.params.turnId);
 	if (!t) return res.json({ ok: true, status: "unknown" });
+	const steps = t.steps || [];
 	if (t.status === "done")
-		return res.json({ ok: true, status: "done", reply: t.reply });
+		return res.json({
+			ok: true,
+			status: "done",
+			reply: t.reply,
+			isNew: t.isNew === true,
+			steps,
+		});
 	if (t.status === "error")
-		return res.json({ ok: true, status: "error", error: t.error });
-	return res.json({ ok: true, status: "pending" });
+		return res.json({ ok: true, status: "error", error: t.error, steps });
+	return res.json({ ok: true, status: "pending", steps });
+});
+
+// POST /api/gm/reset  { syncId } → drop the resumed Claude conversation for this
+// league. The next message spawns a fresh session, so it re-reads CLAUDE.md /
+// SCHEMA.md and sheds any stale framing. Backs the client's `/clear` command
+// (which otherwise only wipes the local transcript). GM-MEMORY.md is untouched.
+app.post("/api/gm/reset", (req, res) => {
+	const { syncId } = req.body || {};
+	if (!syncId || typeof syncId !== "string") {
+		return res.status(400).json({ ok: false, error: "Missing syncId" });
+	}
+	try {
+		resetSession(syncId);
+		res.json({ ok: true });
+	} catch (err) {
+		res.status(500).json({ ok: false, error: err.message });
+	}
 });
 
 // GET /api/gm/status/:syncId → freshness + memory presence for the modal header
@@ -582,29 +684,59 @@ app.get("/broadcast", (_req, res) => {
 // background job; the client polls the status endpoint; GET returns the cached
 // script when done. One job per game at a time; a finished script is cached on
 // disk and reused.
+// 503 = card is out of action (breaker open); 429 = we're just backed up.
+function gpuQueueHttpStatus(err) {
+	if (err instanceof BreakerOpenError) return 503;
+	if (err instanceof QueueFullError) return 429;
+	throw err;
+}
+
+// GET /api/gpu-queue → breaker state, what's rendering, what's waiting.
+app.get("/api/gpu-queue", (_req, res) => res.json(queueState()));
+
+// POST /api/gpu-queue/reset → clear the breaker after the card is confirmed back
+// (in practice: after a reboot). Queued jobs are already blocked; resubmit them.
+app.post("/api/gpu-queue/reset", (_req, res) =>
+	res.json({ was: resetBreaker(), now: queueState() }),
+);
+
 const scriptJobs = new Map(); // gid -> { status, done, total, error, startedAt }
 
-async function runScriptJob(gid, broadcast) {
-	const job = { status: "running", done: 0, total: 0, error: null };
+// Script generation runs a local LLM on the GPU, so it queues behind (and ahead
+// of) TTS renders rather than competing with them for the card. See gpu-queue.js.
+function runScriptJob(gid, broadcast) {
+	const job = { status: "queued", done: 0, total: 0, error: null };
 	scriptJobs.set(String(gid), job);
-	try {
-		const script = await buildScript(broadcast, {
-			onProgress: ({ done, total }) => {
-				job.done = done;
-				job.total = total;
-			},
-		});
-		saveScript(script, Date.now());
-		job.status = "done";
-		console.log(
-			`[broadcast-script] gid=${gid} done — ${script.numSegments} segments, ` +
-				`${script.numUtterances} lines, ${script.llmFailures} fallback(s)`,
-		);
-	} catch (err) {
-		job.status = "error";
-		job.error = err.message;
-		console.error(`[broadcast-script] gid=${gid} job failed:`, err.message);
-	}
+	return enqueue({
+		kind: "script",
+		gid,
+		onBlocked: (reason) => {
+			job.status = "blocked";
+			job.error = reason;
+		},
+		run: async () => {
+			job.status = "running";
+			try {
+				const script = await buildScript(broadcast, {
+					onProgress: ({ done, total }) => {
+						job.done = done;
+						job.total = total;
+					},
+				});
+				saveScript(script, Date.now());
+				job.status = "done";
+				console.log(
+					`[broadcast-script] gid=${gid} done — ${script.numSegments} segments, ` +
+						`${script.numUtterances} lines, ${script.llmFailures} fallback(s)`,
+				);
+			} catch (err) {
+				job.status = "error";
+				job.error = err.message;
+				console.error(`[broadcast-script] gid=${gid} job failed:`, err.message);
+				throw err; // let the queue's breaker see it
+			}
+		},
+	});
 }
 
 // POST /api/broadcast/:gid/script → start (or reuse) two-voice script generation.
@@ -615,9 +747,12 @@ app.post("/api/broadcast/:gid/script", (req, res) => {
 		return res.json({ status: "done", cached: true });
 	}
 	const existing = scriptJobs.get(String(gid));
-	if (existing && existing.status === "running") {
+	if (
+		existing &&
+		(existing.status === "running" || existing.status === "queued")
+	) {
 		return res.json({
-			status: "running",
+			status: existing.status,
 			done: existing.done,
 			total: existing.total,
 		});
@@ -628,8 +763,12 @@ app.post("/api/broadcast/:gid/script", (req, res) => {
 			.status(404)
 			.json({ error: "no broadcast transcript for that game" });
 	}
-	runScriptJob(gid, broadcast); // fire-and-forget
-	res.status(202).json({ status: "running", done: 0, total: 0 });
+	try {
+		const { position } = runScriptJob(gid, broadcast);
+		res.status(202).json({ status: "queued", position, done: 0, total: 0 });
+	} catch (err) {
+		res.status(gpuQueueHttpStatus(err)).json({ error: err.message });
+	}
 });
 
 // GET /api/broadcast/:gid/script/status → poll job progress.
@@ -646,6 +785,160 @@ app.get("/api/broadcast/:gid/script", (req, res) => {
 	const s = getScript(req.params.gid);
 	if (!s) return res.status(404).json({ error: "script not generated yet" });
 	res.json(s);
+});
+
+// ── Radio broadcast Phase 3 — Kokoro TTS audio ──────────────────────────────
+//
+// Renders the Phase-2 script to a single stitched two-voice audio file via the
+// Python Kokoro renderer (a few minutes for a full game — background job, same
+// shape as scriptJobs). The finished mp3 + timing manifest are cached on disk
+// and streamed to the in-app player, which uses the manifest's per-segment
+// startSec/scoreEnd to reveal the score progressively (spoiler-safe).
+const audioJobs = new Map(); // gid -> { status, done, total, error }
+
+function runAudioJob(gid) {
+	const job = { status: "queued", done: 0, total: 0, error: null };
+	audioJobs.set(String(gid), job);
+	return enqueue({
+		kind: "audio",
+		gid,
+		onBlocked: (reason) => {
+			job.status = "blocked";
+			job.error = reason;
+		},
+		run: async () => {
+			job.status = "running";
+			try {
+				await renderAudio(gid, scriptFile(gid), {
+					onProgress: ({ done, total }) => {
+						job.done = done;
+						job.total = total;
+					},
+				});
+				job.status = "done";
+				const m = getManifest(gid);
+				console.log(
+					`[broadcast-audio] gid=${gid} done — ${m?.numUtterances ?? "?"} lines, ` +
+						`${m ? (m.durationSec / 60).toFixed(1) : "?"} min`,
+				);
+			} catch (err) {
+				job.status = "error";
+				job.error = err.message;
+				console.error(`[broadcast-audio] gid=${gid} job failed:`, err.message);
+				throw err; // let the queue's breaker see it
+			}
+		},
+	});
+}
+
+// POST /api/broadcast/:gid/audio → start (or reuse) TTS rendering. Requires the
+// Phase-2 script to exist first. ?force=1 re-renders even if cached.
+app.post("/api/broadcast/:gid/audio", (req, res) => {
+	const gid = req.params.gid;
+	if (req.query.force !== "1" && hasAudio(gid)) {
+		return res.json({ status: "done", cached: true });
+	}
+	// Refuse before the job reaches the GPU queue, so a disabled render can't
+	// trip the breaker or burn its retries.
+	if (!TTS_ENABLED) {
+		return res
+			.status(503)
+			.json({ error: "TTS disabled (GPU fault 2026-07-09); set BBGM_TTS=1" });
+	}
+	const existing = audioJobs.get(String(gid));
+	if (
+		existing &&
+		(existing.status === "running" || existing.status === "queued")
+	) {
+		return res.json({
+			status: existing.status,
+			done: existing.done,
+			total: existing.total,
+		});
+	}
+	if (!hasScript(gid)) {
+		return res
+			.status(409)
+			.json({ error: "generate the announcer script first" });
+	}
+	try {
+		const { position } = runAudioJob(gid);
+		res.status(202).json({ status: "queued", position, done: 0, total: 0 });
+	} catch (err) {
+		res.status(gpuQueueHttpStatus(err)).json({ error: err.message });
+	}
+});
+
+// GET /api/broadcast/:gid/audio/status → poll render progress.
+app.get("/api/broadcast/:gid/audio/status", (req, res) => {
+	const gid = req.params.gid;
+	const job = audioJobs.get(String(gid));
+	if (job) return res.json(job);
+	if (hasAudio(gid)) return res.json({ status: "done", done: 1, total: 1 });
+	res.json({ status: "none" });
+});
+
+// GET /api/broadcast/:gid/audio → the timing manifest (durationSec + per-segment
+// startSec/score reveal). The player fetches this, then streams .../audio/stream.
+app.get("/api/broadcast/:gid/audio", (req, res) => {
+	const m = getManifest(req.params.gid);
+	if (!m) return res.status(404).json({ error: "audio not rendered yet" });
+	res.json(m);
+});
+
+// GET /api/broadcast/:gid/audio/stream → the stitched audio file (Range-enabled
+// via res.sendFile so the player can seek/scrub).
+app.get("/api/broadcast/:gid/audio/stream", (req, res) => {
+	const p = resolveAudioPath(req.params.gid);
+	if (!p) return res.status(404).json({ error: "audio not rendered yet" });
+	res.sendFile(p);
+});
+
+// POST /api/tts { text, voice? } → speak arbitrary text in a cloned voice and
+// stream back the mp3. Powers the AGM "speak this reply" button (default = Breen).
+// Cached by content hash, so a repeat of the same text returns instantly.
+app.post("/api/tts", async (req, res) => {
+	const text = (req.body?.text ?? "").toString();
+	const voice = (req.body?.voice ?? "pbp").toString();
+	if (!text.trim()) return res.status(400).json({ error: "text required" });
+	// Cap length so a giant GM reply can't tie up the GPU for minutes.
+	const capped = text.length > 1200 ? `${text.slice(0, 1200)}…` : text;
+
+	// Checked before the cache lookup so the kill switch stays authoritative:
+	// cachedTextPath() reads voices.json and can throw, which would otherwise
+	// mask this with a 500.
+	if (!TTS_ENABLED) {
+		return res
+			.status(503)
+			.json({ error: "TTS disabled (GPU fault 2026-07-09); set BBGM_TTS=1" });
+	}
+
+	// A cache hit is pure disk — always safe, even mid-render.
+	const cached = cachedTextPath(capped, voice);
+	if (cached) return res.type("audio/mpeg").sendFile(cached);
+
+	// Otherwise this would put a second ROCm stream on the card alongside a
+	// broadcast render, which is what wedged the GPU on 2026-07-09. Refuse rather
+	// than contend; the render finishes and the button works again.
+	const q = queueState();
+	if (q.breaker.open) {
+		return res
+			.status(503)
+			.json({ error: `GPU circuit breaker open: ${q.breaker.reason}` });
+	}
+	if (q.active) {
+		return res.status(503).json({
+			error: `GPU busy rendering ${q.active.kind} for game ${q.active.gid} — try again when it finishes`,
+			active: q.active,
+		});
+	}
+	try {
+		const mp3 = await renderText(capped, voice);
+		res.type("audio/mpeg").sendFile(mp3);
+	} catch (err) {
+		console.error("[tts] speak failed:", err.message);
+		res.status(500).json({ error: err.message });
+	}
 });
 
 // ── Phase 2 animation spike — standalone Pixi.js viewer ─────────────────────

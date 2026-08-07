@@ -96,6 +96,7 @@ import {
 	clearLiveSimStash,
 	resimLiveGameWithCoaching,
 } from "../core/game/liveSimStash.ts";
+import { finalizeLiveGame } from "../core/game/play.ts";
 import goatFormula from "../util/goatFormula.ts";
 import getRandomTeams from "./getRandomTeams.ts";
 import { withState } from "../core/player/name.ts";
@@ -3908,7 +3909,20 @@ const switchTeam = async (tid: number, conditions: Conditions) => {
 	}
 };
 
-const onLiveSimOver = async () => {
+// Fires when a live game's viewing session ends — either it played out to a
+// real conclusion, or the user navigated away/closed the tab mid-game. Either
+// way, no further coaching changes are coming, so this is the one moment we
+// commit whatever result is currently stashed for it (original, or the latest
+// coaching re-sim) to stats/box/series. MUST run before clearLiveSimStash,
+// which is what would otherwise discard that pending result unwritten.
+const onLiveSimOver = async (
+	input: { gid?: number } | undefined,
+	conditions: Conditions,
+) => {
+	if (input?.gid !== undefined) {
+		await finalizeLiveGame(input.gid, conditions);
+	}
+
 	local.liveSimRatingsStatsPopoverPlayers = undefined;
 	clearLiveSimStash();
 
@@ -4329,6 +4343,115 @@ const updatePlayingTime = async ({
 	}
 	p.ptModifier = ptModifier;
 	await idb.cache.players.put(p);
+};
+
+const updateMinutesTarget = async ({
+	pid,
+	min,
+	target,
+	max,
+}: {
+	pid: number;
+	min?: number;
+	target?: number;
+	max?: number;
+}) => {
+	const p = await idb.cache.players.get(pid);
+	if (!p) {
+		throw new Error("Invalid pid");
+	}
+
+	// A player can play at most the whole game (regulation length); clamp each
+	// value into [0, gameMinutes] and keep min <= target <= max so the values are
+	// always internally consistent before they reach the sim.
+	const gameMinutes = g.get("numPeriods") * g.get("quarterLength");
+	const clamp = (v: number | undefined) => {
+		if (v === undefined || Number.isNaN(v)) {
+			return undefined;
+		}
+		return helpers.bound(Math.round(v), 0, gameMinutes);
+	};
+
+	let lo = clamp(min);
+	let tg = clamp(target);
+	let hi = clamp(max);
+
+	// Enforce ordering min <= target <= max where present.
+	if (lo !== undefined && hi !== undefined && lo > hi) {
+		lo = hi;
+	}
+	if (tg !== undefined) {
+		if (lo !== undefined && tg < lo) {
+			tg = lo;
+		}
+		if (hi !== undefined && tg > hi) {
+			tg = hi;
+		}
+	}
+
+	if (lo === undefined && tg === undefined && hi === undefined) {
+		delete p.minutesTarget;
+	} else {
+		p.minutesTarget = { min: lo, target: tg, max: hi };
+	}
+	await idb.cache.players.put(p);
+};
+
+// Fill in sensible per-player minutes from the current depth chart (rosterOrder)
+// so the rotation's targets sum to the minutes that must be filled each game.
+// Deep-bench players are left uncapped so spot/garbage minutes still happen.
+const autoSetMinutesTargets = async ({ tid }: { tid: number }) => {
+	const players = await idb.cache.players.indexGetAll("playersByTid", tid);
+	if (players.length === 0) {
+		return;
+	}
+
+	const gameMinutes = g.get("numPeriods") * g.get("quarterLength");
+	const numOnCourt = g.get("numPlayersOnCourt");
+	const available = numOnCourt * gameMinutes;
+
+	const sorted = orderBy(players, "rosterOrder");
+
+	const startersCount = Math.min(sorted.length, numOnCourt);
+	const benchCount = Math.min(Math.max(0, sorted.length - numOnCourt), 4);
+
+	// Starters average ~1.7x a rotation bench player. Solve so
+	// startersCount*ts + benchCount*tb === available.
+	const ratio = 1.7;
+	const denom = ratio * startersCount + benchCount || 1;
+	const tb = available / denom;
+	const ts = ratio * tb;
+
+	const band = (target: number, lo: number, hi: number) => ({
+		min: helpers.bound(target - lo, 0, gameMinutes),
+		target: helpers.bound(target, 0, gameMinutes),
+		max: helpers.bound(target + hi, 0, gameMinutes),
+	});
+
+	for (let i = 0; i < sorted.length; i++) {
+		const p = sorted[i]!;
+		if (i < startersCount) {
+			p.minutesTarget = band(Math.round(ts), 4, 4);
+		} else if (i < startersCount + benchCount) {
+			p.minutesTarget = band(Math.round(tb), 4, 6);
+		} else {
+			delete p.minutesTarget;
+		}
+		await idb.cache.players.put(p);
+	}
+
+	await toUI("realtimeUpdate", [["playerMovement"]]);
+};
+
+const clearMinutesTargets = async ({ tid }: { tid: number }) => {
+	const players = await idb.cache.players.indexGetAll("playersByTid", tid);
+	for (const p of players) {
+		if (p.minutesTarget !== undefined) {
+			delete p.minutesTarget;
+			await idb.cache.players.put(p);
+		}
+	}
+	await toUI("realtimeUpdate", [["playerMovement"]]);
 };
 
 const updatePlayoffTeams = async (
@@ -5352,6 +5475,9 @@ export default {
 		updatePlayerWatch,
 		updatePlayersWatch,
 		updatePlayingTime,
+		updateMinutesTarget,
+		autoSetMinutesTargets,
+		clearMinutesTargets,
 		updatePlayoffTeams,
 		updateTeamInfo,
 		updateTrade,

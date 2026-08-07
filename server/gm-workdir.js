@@ -2,6 +2,8 @@
 // runs inside: ~/bbgm-gm/<syncId>/
 //
 //   league.json   — the full ZenGM league export (re-written only when changed)
+//   boxscores.json — per-game box scores (the "games" store), split out of the
+//                    snapshot on sync; present only once a games-bearing sync lands
 //   CLAUDE.md     — GM persona + jq cookbook (refreshed each turn)
 //   SCHEMA.md     — export shape notes for cheap jq navigation
 //   GM-MEMORY.md  — durable memory the GM maintains himself (NEVER overwritten)
@@ -10,6 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
+import { boxScoresFileFor } from "./db.js";
 
 const ROOT = process.env.GM_WORKDIR_ROOT || path.join(os.homedir(), "bbgm-gm");
 
@@ -40,7 +43,8 @@ Current league context (at last sync): **${meta.season ?? "?"} season**, phase: 
 
 Orient yourself first when a question needs data:
 - \`jq -r 'keys' league.json\` — top-level stores
-- \`jq '.gameAttributes.userTid, .gameAttributes.season, .gameAttributes.phase' league.json\` — whose team you manage + where the league is. **The user's team is \`userTid\`** — anchor every "we / us / our" answer on it.
+- \`jq '{userTid: (.gameAttributes.userTid | if type=="array" then .[-1].value else . end), season: .gameAttributes.season, phase: .gameAttributes.phase}' league.json\` — whose team you manage + where the league is. \`userTid\` can be history-wrapped (\`[{start,value}]\`), so unwrap it as shown. **The user's team is \`userTid\`** — anchor every "we / us / our" answer on it.
+- The user sets a per-player **minutes plan** (Min / Tgt / Max) on the Roster page — it lives in each player's \`minutesTarget\` field, NOT \`ptModifier\`. When they ask about minutes or the rotation, read \`minutesTarget\`. See \`SCHEMA.md\`.
 
 See \`SCHEMA.md\` for where rosters, stats, contracts, standings, and picks live, plus ready-made jq snippets.
 
@@ -74,9 +78,12 @@ Every player (active + retired + draft prospects). Key fields:
 - \`stats[]\` — one row per team-season: \`{ season, tid, playoffs, gp, min, pts, trb, ast, fg, fga, tp, tpa, ft, fta, stl, blk, tov, pf, ... }\`. Raw box-score totals; per-game = divide by gp. Advanced stats (PER/WS/etc.) are NOT precomputed in the export — compute from these if asked.
 - \`contract\` — \`{ amount (thousands), exp (season) }\`
 - \`draft\` — \`{ year, round, pick, tid }\`, \`injury\`, \`awards[]\`
+- \`ptModifier\` — playing-time *nudge* multiplier only (0 / 0.75 / 1 / 1.25 / 1.5; 1 = normal). This is NOT minutes — don't report it as the rotation.
+- \`minutesTarget\` — the user's hard per-game **minutes** plan for their own players: \`{ min?, target?, max? }\` in absolute minutes (any field may be absent; the whole object is absent when the coach decides freely). This is the real **Min / Tgt / Max** the user sets on the Roster page. When asked about minutes, the rotation, or who's getting a hard cap/floor, read \`minutesTarget\` — not \`ptModifier\`.
 
 Common jq:
-- Your roster: \`jq --argjson t <userTid> '[.players[] | select(.tid==$t) | {name:(.firstName+" "+.lastName), ovr:(.ratings[-1].ovr), pos:(.ratings[-1].pos), salary:.contract.amount, exp:.contract.exp}] | sort_by(-.ovr)' league.json\`
+- Resolve your team id first — \`userTid\` may be a plain value OR history-wrapped as \`[{start, value}]\`: \`jq '.gameAttributes.userTid | if type=="array" then .[-1].value else . end' league.json\`
+- Your roster, with the minutes plan: \`jq -c --argjson t <userTid> '.players[] | select(.tid==$t) | {name:(.firstName+" "+.lastName), ovr:(.ratings[-1].ovr), pos:(.ratings[-1].pos), pt:.ptModifier, minutes:.minutesTarget, salary:.contract.amount, exp:.contract.exp}' league.json\`
 - A player's latest-season stats: filter \`.players[] | select(...) | .stats[-1]\`
 
 ## teams[]
@@ -94,8 +101,18 @@ Future/owned picks: \`{ tid, originalTid, season, round }\` — who controls whi
 ## schedule[]
 Remaining games this season: \`{ homeTid, awayTid }\`.
 
+## boxscores.json — PER-GAME box scores (separate file, not in league.json)
+A top-level JSON **array of game objects** (the ZenGM \`games\` store), split out of the export so \`league.json\` stays lean. **Present only if it exists in the workdir** — if the file is missing, no games-bearing sync has landed yet; fall back to diffing cumulative \`players[].stats\`. This is the ground truth for a single game's line (minutes, +/-, per-player stats) — no diffing needed.
+- Each game: \`{ gid, season, playoffs, day, overtimes, teams: [teamA, teamB], ... }\`.
+- Each team entry: \`{ tid, pts, players: [ { pid, name, min, fg, fga, tp, tpa, ft, fta, orb, drb, ast, tov, stl, blk, pf, pts, pm, ... } ], ... }\` (team-level stat totals sit alongside \`players\`).
+- **Introspect the exact shape the first time** (BBGM versions differ): \`jq '.[-1] | {gid, keys:keys, team0:(.teams[0]|keys), p0:(.teams[0].players[0])}' boxscores.json\`. Confirm which of \`teams[0]/[1]\` is home (cross-ref \`schedule\`/\`day\` or the higher \`pts\` vs the known final).
+- Find a specific game (e.g. our latest vs a foe) by tid + newest gid:
+  \`jq --argjson me <userTid> '[.[] | select(any(.teams[]; .tid==$me))] | sort_by(.gid) | last' boxscores.json\`
+- reb = \`orb + drb\` (no \`trb\` field), same as \`players[].stats\`.
+
 ## gameAttributes
-Object (not array): \`userTid\`, \`season\`, \`phase\`, \`salaryCap\`, \`minPayroll\`, \`luxuryPayroll\`, \`numGames\`, \`confs\`, \`divs\`, etc.
+Object (not array): \`userTid\`, \`season\`, \`phase\`, \`salaryCap\`, \`minPayroll\`, \`luxuryPayroll\`, \`numGames\`, \`numPeriods\`, \`quarterLength\`, \`confs\`, \`divs\`, etc.
+Some keys are stored as **history arrays** \`[{ start, value }]\` rather than a bare value — \`userTid\` in particular. Always resolve with \`if type=="array" then .[-1].value else . end\` before comparing (e.g. \`select(.tid == $userTid)\` silently matches nothing if \`$userTid\` is the raw array). Game length in minutes = \`numPeriods * quarterLength\` — the ceiling for any \`minutesTarget\`.
 `;
 
 const MEMORY_SEED = `# GM Memory
@@ -139,6 +156,21 @@ export const ensureWorkdir = (syncId, leagueJsonString, meta = {}) => {
 		fs.writeFileSync(leaguePath, leagueJsonString);
 		fs.writeFileSync(hashPath, newHash);
 	}
+
+	// boxscores.json — the split-out "games" store (per-game box scores). Only
+	// present once a games-bearing sync has landed. Refresh it when the league
+	// changed (box scores change with it) or when the workdir copy is missing.
+	// Best-effort: a missing/failed copy must never break a GM turn.
+	try {
+		const boxSrc = boxScoresFileFor(syncId);
+		const boxDest = path.join(dir, "boxscores.json");
+		if (
+			fs.existsSync(boxSrc) &&
+			(newHash !== prevHash || !fs.existsSync(boxDest))
+		) {
+			fs.copyFileSync(boxSrc, boxDest);
+		}
+	} catch {}
 
 	// Persona + schema — refreshed each turn (cheap, keeps them current)
 	fs.writeFileSync(path.join(dir, "CLAUDE.md"), personaTemplate(meta));

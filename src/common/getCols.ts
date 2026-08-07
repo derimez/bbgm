@@ -3393,6 +3393,11 @@ const cols: {
 		noSearch: true,
 		sortSequence: [],
 	},
+	Minutes: {
+		desc: "Hard minutes target: min / target / max",
+		noSearch: true,
+		sortSequence: [],
+	},
 	PTS: {
 		desc: "Points",
 		sortSequence: ["desc", "asc"],

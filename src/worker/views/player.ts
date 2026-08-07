@@ -1,4 +1,5 @@
 import {
+	PHASE,
 	PLAYER,
 	PLAYER_STATS_TABLES,
 	RATINGS,
@@ -504,6 +505,68 @@ export const getCommon = async (
 	};
 };
 
+// Current-season, per-game league averages keyed by stat, used as a comparison
+// benchmark row on the player's stat tables. Basketball only — other sports'
+// tables use totals and per-position formatting that don't average cleanly.
+const getLeagueAverages = async (): Promise<
+	{ season: number; stats: Record<string, number> } | undefined
+> => {
+	if (!isSport("basketball")) {
+		return;
+	}
+
+	const season = g.get("season");
+	const statKeys = getPlayerProfileStats();
+
+	let playersAll;
+	if (g.get("phase") <= PHASE.PLAYOFFS) {
+		playersAll = await idb.cache.players.indexGetAll("playersByTid", [
+			PLAYER.FREE_AGENT,
+			Infinity,
+		]);
+	} else {
+		playersAll = await idb.getCopies.players(
+			{ activeSeason: season },
+			"noCopyCache",
+		);
+	}
+
+	// Default statType (perGame) matches the player's own stat rows.
+	const players = await idb.getCopies.playersPlus(playersAll, {
+		stats: ["gp", ...statKeys],
+		season,
+		mergeStats: "totOnly",
+	});
+
+	const totals: Record<string, number> = {};
+	const counts: Record<string, number> = {};
+	for (const p of players) {
+		if (!p.stats || p.stats.gp <= 0) {
+			continue;
+		}
+		for (const stat of statKeys) {
+			const v = p.stats[stat];
+			if (typeof v === "number" && Number.isFinite(v)) {
+				totals[stat] = (totals[stat] ?? 0) + v;
+				counts[stat] = (counts[stat] ?? 0) + 1;
+			}
+		}
+	}
+
+	if (Object.keys(counts).length === 0) {
+		return;
+	}
+
+	const stats: Record<string, number> = {};
+	for (const stat of statKeys) {
+		if (counts[stat]) {
+			stats[stat] = totals[stat]! / counts[stat]!;
+		}
+	}
+
+	return { season, stats };
+};
+
 const updatePlayer = async (
 	inputs: ViewInput<"player">,
 	updateEvents: UpdateEvents,
@@ -582,12 +645,15 @@ const updatePlayer = async (
 
 		const analytics = await getPlayerAnalytics(p);
 
+		const leagueStats = await getLeagueAverages();
+
 		return {
 			...topStuff,
 			analytics,
 			events,
 			feats,
 			leaders,
+			leagueStats,
 			ratings: RATINGS,
 		};
 	}

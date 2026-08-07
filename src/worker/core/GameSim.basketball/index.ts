@@ -92,6 +92,14 @@ type PlayerGameSim = {
 	};
 	ptModifier: number;
 
+	// Hard playing-time controls (user team only; cleared for AI in loadTeams).
+	// Absolute minutes: max is a hard cap, min/target are soft goals.
+	minutesTarget?: {
+		min?: number;
+		target?: number;
+		max?: number;
+	};
+
 	// Live "coach mode" overrides (set mid-sim by applyPendingCoaching)
 	forceOn?: boolean; // guaranteed on the court
 	forceOff?: boolean; // benched (unless roster is too thin to field 5)
@@ -1045,12 +1053,65 @@ class GameSim extends GameSimBase {
 
 		const foulLimit = this.getFoulTroubleLimit();
 
+		// Fraction of regulation elapsed so far, used to pace hard-minute targets
+		// (how many minutes a player "should" have by now). Clamped to [0, 1].
+		const regulationMinutes = this.numPeriods * g.get("quarterLength");
+		let elapsedFraction = 0;
+		if (this.o !== undefined) {
+			const periodLen = g.get("quarterLength") * 60;
+			const quarter = this.team[this.o].stat.ptsQtrs.length;
+			const elapsedSeconds = (quarter - 1) * periodLen + (periodLen - this.t);
+			elapsedFraction = Math.max(
+				0,
+				Math.min(1, elapsedSeconds / (regulationMinutes * 60)),
+			);
+		}
+
+		// Soft shaping multiplier for a player's on-court rating from his hard
+		// minutes: pace toward target/min, nudge extra late if under min, and
+		// taper as the max cap nears so the rotation eases him out before the hard
+		// cutoff (so we don't blow past max between substitutions).
+		const minutesFactor = (
+			p: PlayerGameSim,
+			mt: NonNullable<PlayerGameSim["minutesTarget"]>,
+		) => {
+			let factor = 1;
+
+			const goal = mt.target ?? mt.min;
+			if (goal !== undefined && goal > 0) {
+				const expected = goal * elapsedFraction;
+				const deficit = expected - p.stat.min; // + => behind pace
+				factor *= Math.max(0.6, Math.min(1.6, 1 + 0.06 * deficit));
+			}
+
+			if (lateGame && mt.min !== undefined && p.stat.min < mt.min) {
+				factor *= 1.5;
+			}
+
+			if (mt.max !== undefined) {
+				const remaining = mt.max - p.stat.min;
+				if (remaining <= 2) {
+					factor *= Math.max(0, Math.min(1, remaining / 2));
+				}
+			}
+
+			return factor;
+		};
+
 		for (const t of teamNums) {
 			const getOvrs = (includeFouledOut: boolean) => {
 				// Overall values scaled by fatigue, etc
 				const ovrs: Record<number, number> = {};
 
 				for (const [i, p] of this.team[t].player.entries()) {
+					const mt = p.minutesTarget;
+
+					// Hard cap: a player at/over his max minutes is ineligible. Like
+					// force-off and foul-outs, this is lifted in the includeFouledOut
+					// fallback so the team can always field 5.
+					const atMinutesCap =
+						!includeFouledOut && mt?.max !== undefined && p.stat.min >= mt.max;
+
 					// Injured, fouled out, or coach-benched players can't play
 					// (force-off is lifted in the includeFouledOut fallback so a
 					// benched player is still used if the roster can't field 5).
@@ -1059,7 +1120,8 @@ class GameSim extends GameSimBase {
 						(!includeFouledOut && p.forceOff) ||
 						(!includeFouledOut &&
 							foulsNeededToFoulOut > 0 &&
-							p.stat.pf >= foulsNeededToFoulOut)
+							p.stat.pf >= foulsNeededToFoulOut) ||
+						atMinutesCap
 					) {
 						ovrs[p.id] = -Infinity;
 					} else {
@@ -1079,6 +1141,12 @@ class GameSim extends GameSimBase {
 							// If it's not a blowout, worry about foul trouble
 							const foulTroubleFactor = this.getFoulTroubleFactor(p, foulLimit);
 							ovrs[p.id]! *= foulTroubleFactor;
+						}
+
+						// Hard-minutes shaping (user team): steer toward target/min and
+						// taper toward the max cap.
+						if (!this.allStarGame && mt) {
+							ovrs[p.id]! *= minutesFactor(p, mt);
 						}
 
 						// Live coach mode: a force-on player dominates all scaling so

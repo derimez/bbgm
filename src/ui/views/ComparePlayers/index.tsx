@@ -14,6 +14,7 @@ import {
 import getSortVal from "../../components/DataTable/getSortVal.tsx";
 import { groupByUnique } from "../../../common/utils.ts";
 import PlayersForm from "./PlayersForm.tsx";
+import ComparePlayersAnalytics from "./PlayerAnalytics.tsx";
 import CollapseArrow from "../../components/CollapseArrow.tsx";
 import { lowerIsBetter } from "../../../common/lowerIsBetter.ts";
 import { Contract, ContractAmount } from "../../components/contract.tsx";
@@ -514,6 +515,7 @@ const ComparePlayers = ({
 					</tbody>
 				</table>
 			</div>
+			<ComparePlayersAnalytics players={players} />
 		</>
 	);
 };

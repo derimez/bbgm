@@ -56,6 +56,12 @@ export type ViewInput<T extends keyof typeof processInputs> = Exclude<
 	{ redirectUrl: string }
 >;
 
+export type MinutesTarget = {
+	min?: number;
+	target?: number;
+	max?: number;
+};
+
 export type AchievementWhen =
 	| "afterAwards"
 	| "afterFired"
@@ -1186,6 +1192,11 @@ export type PlayerWithoutKey<PlayerRatings = MinimalPlayerRatings> = {
 	pid?: number;
 	pos?: string; // Only in players from custom league files
 	ptModifier: number;
+	// Hard playing-time controls (basketball, user team). Absolute minutes: max
+	// is a hard cap the sim won't exceed (unless it can't otherwise field 5),
+	// min/target are soft goals the rotation steers toward. Undefined = coach
+	// decides normally.
+	minutesTarget?: MinutesTarget;
 	ratings: NonEmptyArray<PlayerRatings>;
 	real?: boolean;
 	relatives: Relative[];

@@ -80,6 +80,10 @@ const updatePlayers = async (
 			);
 		}
 
+		// Keep a pristine leaguewide set for the League Average row before the
+		// watch/playoffs filters below narrow `playersAll`.
+		const allLeaguePlayers = playersAll;
+
 		let tid: number | undefined = g
 			.get("teamInfoCache")
 			.findIndex((t) => t.abbrev === inputs.abbrev);
@@ -219,6 +223,52 @@ const updatePlayers = async (
 			}
 		}
 
+		// League Average comparison row: the equal-weight mean of each stat across
+		// every player leaguewide who actually played this season, independent of
+		// the team filter. Only meaningful for a single numeric season of
+		// averageable stats (game highs are maxes, so we skip them).
+		let leagueStats: Record<string, number> | undefined;
+		if (
+			isSport("basketball") &&
+			typeof inputs.season === "number" &&
+			inputs.statType !== "gameHighs"
+		) {
+			const leaguePlayers = await idb.getCopies.playersPlus(allLeaguePlayers, {
+				ratings: ["season"],
+				stats: ["season", "gp", ...actualStats],
+				season: inputs.season,
+				statType,
+				playoffs: inputs.playoffs === "playoffs",
+				regularSeason: inputs.playoffs === "regularSeason",
+				combined: inputs.playoffs === "combined",
+				mergeStats: "totOnly",
+			});
+
+			const totals: Record<string, number> = {};
+			const counts: Record<string, number> = {};
+			for (const lp of leaguePlayers) {
+				if (!lp.stats || lp.stats.gp <= 0) {
+					continue;
+				}
+				for (const stat of stats) {
+					const v = lp.stats[stat];
+					if (typeof v === "number" && Number.isFinite(v)) {
+						totals[stat] = (totals[stat] ?? 0) + v;
+						counts[stat] = (counts[stat] ?? 0) + 1;
+					}
+				}
+			}
+
+			if (Object.keys(counts).length > 0) {
+				leagueStats = {};
+				for (const stat of stats) {
+					if (counts[stat]) {
+						leagueStats[stat] = totals[stat]! / counts[stat]!;
+					}
+				}
+			}
+		}
+
 		let superCols;
 		if (inputs.season === "all") {
 			if (statsTable.superCols) {
@@ -240,6 +290,7 @@ const updatePlayers = async (
 			playoffs: inputs.playoffs,
 			stats,
 			superCols,
+			leagueStats,
 		};
 	}
 };

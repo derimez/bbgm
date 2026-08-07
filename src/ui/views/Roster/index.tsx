@@ -10,6 +10,7 @@ import { toWorker } from "../../util/toWorker.ts";
 import { getCols } from "../../../common/getCols.ts";
 import { useLocal } from "../../util/local.ts";
 import PlayingTime, { ptModifiers, ptStyles } from "./PlayingTime.tsx";
+import MinutesTarget from "./MinutesTarget.tsx";
 import TopStuff from "./TopStuff.tsx";
 import type {
 	GameAttributesLeague,
@@ -112,14 +113,18 @@ const Roster = ({
 	const {
 		challengeNoRatings,
 		gender,
+		numPeriods,
 		phase,
+		quarterLength,
 		salaryCapType,
 		season: currentSeason,
 		userTid,
 	} = useLocal([
 		"challengeNoRatings",
 		"gender",
+		"numPeriods",
 		"phase",
+		"quarterLength",
 		"salaryCapType",
 		"season",
 		"userTid",
@@ -158,6 +163,40 @@ const Roster = ({
 
 	const showMood = season === currentSeason;
 
+	// Hard-minutes controls: basketball only, when the roster is editable (i.e.
+	// the user's own current team).
+	const showMinutes = editable && isSport("basketball");
+	const gameMinutes = numPeriods * quarterLength;
+
+	// Feasibility check so there's always enough playing time to go around: the
+	// team must fill numPlayersOnCourt * gameMinutes each game. If the maximums
+	// cap total available minutes below that, the sim would have to break a cap;
+	// if the minimums sum above it, some floors can't be met.
+	let minutesWarning: string | undefined;
+	if (showMinutes) {
+		const available = numPlayersOnCourt * gameMinutes;
+		const eligible = players.filter(
+			(p) => !p.injury || p.injury.gamesRemaining === 0,
+		);
+		const anySet = players.some((p) => p.minutesTarget);
+		if (anySet) {
+			const minSum = eligible.reduce(
+				(sum, p) => sum + (p.minutesTarget?.min ?? 0),
+				0,
+			);
+			// Players with no max are uncapped — they can absorb whatever's left.
+			const maxSum = eligible.reduce(
+				(sum, p) => sum + (p.minutesTarget?.max ?? gameMinutes),
+				0,
+			);
+			if (minSum > available) {
+				minutesWarning = `Your minimum minutes add up to ${minSum}, but only ${available} are available per game (${numPlayersOnCourt} on court × ${gameMinutes} min). Some minimums can't be met — lower them.`;
+			} else if (maxSum < available) {
+				minutesWarning = `Your maximum caps add up to only ${maxSum}, but ${available} minutes must be filled each game. The sim will exceed some caps to field a full team — raise a cap or leave more players uncapped.`;
+			}
+		}
+	}
+
 	const cols = getCols(
 		[
 			"Name",
@@ -170,6 +209,7 @@ const Roster = ({
 			"Country",
 			...stats.map((stat) => `stat:${stat}`),
 			...(editable ? ["PT"] : []),
+			...(showMinutes ? ["Minutes"] : []),
 			...(showMood ? ["Mood"] : []),
 			...(showRelease ? ["Release"] : []),
 			...(showTradeFor || showTradingBlock ? ["Trade"] : []),
@@ -330,6 +370,9 @@ const Roster = ({
 				},
 				...stats.map((stat) => helpers.roundStat(p.stats[stat], stat)),
 				...(editable ? [<PlayingTime p={p} userTid={userTid} />] : []),
+				...(showMinutes
+					? [<MinutesTarget p={p} gameMinutes={gameMinutes} />]
+					: []),
 				...(showMood
 					? [
 							wrappedMood({
@@ -410,6 +453,39 @@ const Roster = ({
 			{showSpectatorWarning ? (
 				<p className="alert alert-danger d-inline-block">
 					The AI will handle roster management in spectator mode.
+				</p>
+			) : null}
+
+			{showMinutes ? (
+				<div className="d-flex flex-wrap gap-2 mb-2 align-items-center">
+					<button
+						type="button"
+						className="btn btn-sm btn-light-bordered"
+						onClick={async () => {
+							await toWorker("main", "autoSetMinutesTargets", { tid });
+						}}
+					>
+						Auto-set minutes
+					</button>
+					<button
+						type="button"
+						className="btn btn-sm btn-light-bordered"
+						onClick={async () => {
+							await toWorker("main", "clearMinutesTargets", { tid });
+						}}
+					>
+						Clear minutes
+					</button>
+					<span className="text-body-secondary small">
+						Min/Tgt/Max are absolute minutes. Max is a hard cap; the sim keeps
+						everyone under it as long as it can still field {numPlayersOnCourt}.
+					</span>
+				</div>
+			) : null}
+
+			{minutesWarning ? (
+				<p className="alert alert-warning d-block">
+					<b>Minutes:</b> {minutesWarning}
 				</p>
 			) : null}
 

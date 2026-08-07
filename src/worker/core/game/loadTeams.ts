@@ -227,12 +227,15 @@ export const processTeam = async (
 			injured: p.injury.gamesRemaining > playThroughInjuries,
 			jerseyNumber,
 			ptModifier: p.ptModifier,
+			minutesTarget: p.minutesTarget,
 			ovrs: rating.ovrs,
 		};
 
 		// Reset ptModifier for AI teams. This should not be necessary since it should always be 1, but let's be safe.
 		if (!g.get("userTids").includes(t.id) || g.get("spectator")) {
 			p2.ptModifier = 1;
+			// Hard minutes only apply to the user's controlled team.
+			p2.minutesTarget = undefined;
 		}
 		const seasonStats: Record<string, number> = {};
 

@@ -9,6 +9,7 @@ import { shuffle } from "../../common/random.ts";
 import { g } from "../util/index.ts";
 import { last, maxBy } from "../../common/utils.ts";
 import { getPlayerProfileStats } from "./player.ts";
+import { getPlayerAnalytics } from "./getPlayerAnalytics.ts";
 import type { SeasonType } from "../api/processInputs.ts";
 import { bySport } from "../../common/sportFunctions.ts";
 import { getTeamInfoBySeason } from "../util/getTeamInfoBySeason.ts";
@@ -424,12 +425,49 @@ const updateComparePlayers = async (
 						p.jersey = teamInfo.jersey;
 					}
 
+					// Advanced-analytics data for the graphs (percentile radar +
+					// career trend), mirroring the player detail card. This needs the
+					// full multi-season stat history, so fetch it separately from the
+					// single-season row used in the comparison table above.
+					let analytics;
+					let statsAll: any[] = [];
+					if (playoffs !== "playoffs") {
+						const pAdvanced = await idb.getCopy.playersPlus(pRaw, {
+							attrs: ["pid"],
+							stats: [
+								"season",
+								"gp",
+								"min",
+								"per",
+								"ws",
+								"ws48",
+								"tsp",
+								"bpm",
+								"vorp",
+							],
+							playoffs: false,
+							regularSeason: true,
+							statType: "perGame",
+							mergeStats: "totOnly",
+							fuzz: true,
+						});
+						if (pAdvanced && Array.isArray(pAdvanced.stats)) {
+							statsAll = pAdvanced.stats;
+							analytics = await getPlayerAnalytics({
+								pid: pAdvanced.pid,
+								stats: pAdvanced.stats,
+							});
+						}
+					}
+
 					players.push({
 						p,
 						season,
 						firstSeason: pRaw.ratings[0].season,
 						lastSeason: last(pRaw.ratings).season,
 						playoffs,
+						analytics,
+						statsAll,
 					});
 				}
 			}

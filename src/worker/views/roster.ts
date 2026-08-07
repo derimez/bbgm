@@ -183,6 +183,7 @@ const updateRoster = async (
 			"rosterOrder",
 			"injury",
 			"ptModifier",
+			"minutesTarget",
 			"watch",
 			"untradable",
 			"hof",

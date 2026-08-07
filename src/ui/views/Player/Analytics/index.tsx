@@ -10,6 +10,7 @@ type PlayerAnalytics = {
 		number,
 		{ stat: string; name: string; value: number; percentile: number }[]
 	>;
+	trendLeagueBySeason?: Record<number, Record<string, number>>;
 };
 
 // One representative regular-season row per season (handles multi-team seasons
@@ -106,6 +107,7 @@ const Analytics = ({
 							<p className="text-body-secondary small text-center mt-2 mb-0">
 								Percentile rank vs qualifying players
 								{selectedSeason !== undefined ? ` in ${selectedSeason}` : ""}.
+								The dashed ring marks the league average (50th percentile).
 							</p>
 						</>
 					) : (
@@ -116,7 +118,10 @@ const Analytics = ({
 				</div>
 				<div className="col-lg-7 mb-3">
 					<h3 className="mb-2 h5">Career Trend</h3>
-					<CareerTrend rows={rows} />
+					<CareerTrend
+						rows={rows}
+						leagueBySeason={analytics?.trendLeagueBySeason}
+					/>
 				</div>
 			</div>
 

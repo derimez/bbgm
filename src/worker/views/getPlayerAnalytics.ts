@@ -18,6 +18,10 @@ export const RADAR_METRICS = [
 	{ stat: "per", name: "Overall" },
 ] as const;
 
+// Advanced metrics plotted on the career-trend chart. We compute a per-season
+// league average for each so the chart can overlay a comparison line.
+const TREND_METRICS = ["per", "ws", "ws48", "tsp", "bpm", "vorp"] as const;
+
 export type RadarAxis = {
 	stat: string;
 	name: string;
@@ -29,6 +33,9 @@ export type PlayerAnalytics = {
 	metrics: { stat: string; name: string }[];
 	// Keyed by season -> one entry per radar metric
 	radarBySeason: Record<number, RadarAxis[]>;
+	// Keyed by season -> { stat: leagueAverage } for the career-trend overlay,
+	// averaged over the same qualifying (rotation) pool as the radar percentiles.
+	trendLeagueBySeason: Record<number, Record<string, number>>;
 };
 
 // Midrank percentile of `value` within `values` (0-100). Players tied with the
@@ -74,7 +81,10 @@ export const getPlayerAnalytics = async (p: {
 	}
 
 	const radarStats = RADAR_METRICS.map((m) => m.stat);
+	// Everything we need per player row, de-duplicated (per/tsp appear in both).
+	const fetchStats = Array.from(new Set([...radarStats, ...TREND_METRICS]));
 	const radarBySeason: Record<number, RadarAxis[]> = {};
+	const trendLeagueBySeason: Record<number, Record<string, number>> = {};
 
 	for (const season of seasons) {
 		let playersAll;
@@ -92,7 +102,7 @@ export const getPlayerAnalytics = async (p: {
 
 		const players = await idb.getCopies.playersPlus(playersAll, {
 			attrs: ["pid"],
-			stats: ["gp", "min", ...radarStats],
+			stats: ["gp", "min", ...fetchStats],
 			season,
 			statType: "perGame",
 			regularSeason: true,
@@ -110,11 +120,34 @@ export const getPlayerAnalytics = async (p: {
 		// skewed by deep-bench scrubs. Scale the games threshold to season length.
 		const maxGp = Math.max(1, ...withStats.map((p2) => p2.stats.gp));
 		const minGp = Math.max(5, 0.25 * maxGp);
-		let pool = withStats.filter(
+		const qualified = withStats.filter(
 			(p2) => p2.stats.gp >= minGp && p2.stats.min >= 8,
 		);
 
+		// League-average line for the trend chart: mean of each metric over the
+		// qualifying pool (excluding the player-forced add below, so it stays a
+		// true league benchmark).
+		if (qualified.length > 0) {
+			const avg: Record<string, number> = {};
+			for (const stat of TREND_METRICS) {
+				let sum = 0;
+				let count = 0;
+				for (const p2 of qualified) {
+					const v = p2.stats[stat];
+					if (typeof v === "number" && Number.isFinite(v)) {
+						sum += v;
+						count += 1;
+					}
+				}
+				if (count > 0) {
+					avg[stat] = sum / count;
+				}
+			}
+			trendLeagueBySeason[season] = avg;
+		}
+
 		// Always rank the player against the pool, even if he didn't qualify
+		let pool = qualified;
 		if (!pool.some((p2) => p2.pid === p.pid)) {
 			pool = [...pool, me];
 		}
@@ -138,5 +171,6 @@ export const getPlayerAnalytics = async (p: {
 	return {
 		metrics: RADAR_METRICS.map((m) => ({ stat: m.stat, name: m.name })),
 		radarBySeason,
+		trendLeagueBySeason,
 	};
 };

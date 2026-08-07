@@ -27,6 +27,7 @@ const Player2 = ({
 	feats,
 	jerseyNumberInfos,
 	leaders,
+	leagueStats,
 	player,
 	randomDebutsForeverPids,
 	ratings,
@@ -111,6 +112,7 @@ const Player2 = ({
 					superCols={superCols}
 					p={player}
 					leaders={leaders}
+					leagueStats={leagueStats}
 				/>
 			))}
 

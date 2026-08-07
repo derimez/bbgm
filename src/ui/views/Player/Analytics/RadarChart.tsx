@@ -46,7 +46,7 @@ const RadarChart = ({ axes }: { axes: RadarAxis[] }) => {
 			role="img"
 			aria-label="Percentile radar"
 		>
-			{/* Grid rings */}
+			{/* Grid rings — the 50% ring is highlighted as the league average. */}
 			{rings.map((ring) => {
 				const pts = angles
 					.map((angle) => {
@@ -54,13 +54,17 @@ const RadarChart = ({ axes }: { axes: RadarAxis[] }) => {
 						return `${x},${y}`;
 					})
 					.join(" ");
+				const isLeagueAvg = ring === 50;
 				return (
 					<polygon
 						key={ring}
 						points={pts}
 						fill="none"
-						stroke="var(--bs-border-color)"
-						strokeWidth={1}
+						stroke={
+							isLeagueAvg ? "var(--bs-warning)" : "var(--bs-border-color)"
+						}
+						strokeWidth={isLeagueAvg ? 1.5 : 1}
+						strokeDasharray={isLeagueAvg ? "5 4" : undefined}
 					/>
 				);
 			})}

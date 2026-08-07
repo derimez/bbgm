@@ -240,6 +240,26 @@ export const shareSnapshot = (): ShareSnapshotResult => {
 
 let pushInProgress = false;
 
+// Gzip the upload body in the browser. The league JSON is ~11MB uncompressed;
+// gzip cuts it to ~2MB on the wire — the difference between a sync that lands
+// over slow 5G (through the Tailscale DERP relay) and one that stalls mid-upload
+// and never completes, leaving the app to falsely report "synced". The server's
+// express.json auto-inflates gzip request bodies. Falls back to sending the raw
+// string where CompressionStream is unavailable (pre-iOS-16.4 Safari).
+const gzipBody = async (
+	str: string,
+): Promise<{ body: BodyInit; gzip: boolean }> => {
+	if (typeof CompressionStream === "undefined") {
+		return { body: str, gzip: false };
+	}
+	const cs = new CompressionStream("gzip");
+	const writer = cs.writable.getWriter();
+	void writer.write(new TextEncoder().encode(str));
+	void writer.close();
+	const buf = await new Response(cs.readable).arrayBuffer();
+	return { body: buf, gzip: true };
+};
+
 export type PushResult =
 	| { ok: true; savedAt: number; syncId: string }
 	| { ok: false; error: string };
@@ -256,11 +276,14 @@ export const pushNow = async (): Promise<PushResult> => {
 		const info = await toWorker("main", "bbgmSyncInfo", true);
 		if (!info.syncId) return { ok: false, error: "Could not get syncId" };
 
-		// Exclude box scores ("games") — same as SNAPSHOT_STORES. They balloon a
-		// dynasty to tens of MB (and grow every sim); embedding that in the JSON
-		// sync envelope blows past the server's body limit and 413s the push.
-		// Everything needed to continue the league on another device survives.
-		const stream = await makeExportStream(SNAPSHOT_STORES, {
+		// INCLUDE box scores ("games", via ALL_STORES) in the push. They're heavy,
+		// but the server splits them OUT of the stored snapshot on arrival (parks
+		// them in a per-league boxscores file, not the 30-deep snapshot history),
+		// so snapshot storage stays lean while the Assistant GM gets true per-game
+		// lines. Bounded by `saveOldBoxScores` (2 seasons) and well under the
+		// server's 200mb body limit. The iOS "Export Snapshot" share path still
+		// uses SNAPSHOT_STORES (no games) to keep that shared file small.
+		const stream = await makeExportStream(ALL_STORES, {
 			compressed: true,
 		});
 		const reader = stream.getReader();
@@ -272,18 +295,24 @@ export const pushNow = async (): Promise<PushResult> => {
 		}
 		const data = chunks.join("");
 
+		const payload = JSON.stringify({
+			syncId: info.syncId,
+			name: info.name,
+			season: info.season,
+			phase: info.phase,
+			device: getDeviceId(),
+			lid,
+			data,
+		});
+		const { body: reqBody, gzip } = await gzipBody(payload);
+
 		const res = await fetch("/api/v2/sync", {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				syncId: info.syncId,
-				name: info.name,
-				season: info.season,
-				phase: info.phase,
-				device: getDeviceId(),
-				lid,
-				data,
-			}),
+			headers: {
+				"Content-Type": "application/json",
+				...(gzip ? { "Content-Encoding": "gzip" } : {}),
+			},
+			body: reqBody,
 		});
 
 		if (!res.ok) {

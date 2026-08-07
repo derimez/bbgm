@@ -48,6 +48,7 @@ export const StatsTable = ({
 	stats,
 	superCols,
 	leaders,
+	leagueStats,
 }: {
 	name: string;
 	onlyShowIf?: string[];
@@ -55,6 +56,7 @@ export const StatsTable = ({
 	stats: string[];
 	superCols?: SuperCol[];
 	leaders: View<"player">["leaders"];
+	leagueStats: View<"player">["leagueStats"];
 }) => {
 	const hasRegularSeasonStats = hasStats(p.careerStats, onlyShowIf);
 	const hasPlayoffStats = hasStats(p.careerStatsPlayoffs, onlyShowIf);
@@ -145,6 +147,24 @@ export const StatsTable = ({
 				],
 			},
 		];
+
+		// League Average benchmark: current-season, per-game leaguewide averages.
+		// Shown on the Regular Season tab, where per-game rates line up cleanly.
+		if (isSport("basketball") && leagueStats && playoffs === false) {
+			footer.push({
+				classNames: "text-body-secondary",
+				data: [
+					`Lg Avg ${leagueStats.season}`,
+					null,
+					null,
+					...stats.map((stat) =>
+						stat === "pos" || leagueStats.stats[stat] === undefined
+							? null
+							: helpers.roundStat(leagueStats.stats[stat], stat),
+					),
+				],
+			});
+		}
 
 		const rangeFooterState = rangeFooter.state;
 		if (

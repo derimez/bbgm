@@ -9,6 +9,7 @@ import { wrappedAgeAtDeath } from "../components/AgeAtDeath.tsx";
 import { wrappedPlayerNameLabels } from "../components/PlayerNameLabels.tsx";
 import { expandFieldingStats } from "../util/expandFieldingStats.baseball.ts";
 import type { DataTableRow } from "../components/DataTable/index.tsx";
+import type { FooterRow } from "../components/DataTable/Footer.tsx";
 import { PlusMinus } from "../components/PlusMinus.tsx";
 import { useLocal } from "../util/local.ts";
 
@@ -70,6 +71,7 @@ const PlayerStats = ({
 	statType,
 	stats,
 	superCols,
+	leagueStats,
 }: View<"playerStats">) => {
 	useTitleBar({
 		title: "Player Stats",
@@ -223,6 +225,33 @@ const PlayerStats = ({
 		};
 	});
 
+	// League Average comparison row, pinned to the bottom of the table.
+	let footer: FooterRow[] | undefined;
+	if (leagueStats) {
+		footer = [
+			{
+				classNames: "fw-bold",
+				data: [
+					<span title="Average across every player leaguewide who played this season">
+						League Avg
+					</span>,
+					null, // Pos
+					null, // Age
+					null, // Team
+					...stats.map((stat) =>
+						stat === "pos" || leagueStats[stat] === undefined
+							? null
+							: helpers.roundStat(
+									leagueStats[stat],
+									stat,
+									statType === "totals",
+								),
+					),
+				],
+			},
+		];
+	}
+
 	return (
 		<>
 			<MoreLinks
@@ -247,6 +276,7 @@ const PlayerStats = ({
 				name={`PlayerStats${statType}`}
 				rows={rows}
 				superCols={superCols}
+				footer={footer}
 				pagination
 			/>
 		</>

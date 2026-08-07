@@ -197,9 +197,12 @@ class PlayerRow extends Component<PlayerRowProps> {
 	}
 }
 
-const onLiveSimOver = () => {
+const onLiveSimOver = (gid?: number) => {
 	// Send to worker, rather than doing `localActions.update({ liveGameInProgress: false });`, so it works in all tabs
-	toWorker("main", "onLiveSimOver", undefined);
+	// gid tells the worker which live game to finalize (commit its stashed
+	// result — the original, or the latest coaching re-sim if one was applied)
+	// before clearing the coach-mode stash.
+	toWorker("main", "onLiveSimOver", gid !== undefined ? { gid } : undefined);
 };
 
 const getSeconds = (time: string | undefined) => {
@@ -439,6 +442,31 @@ const emitSimSplice = (gid: number, newEvents: any[]) => {
 	} catch {}
 };
 
+// Re-derive who's on the floor purely from the canonical event prefix: starter
+// "gs" stats plus every "sub" event played so far. inGame is otherwise tracked
+// incrementally as events stream, which drifts across repeated coach-mode
+// re-sims at the same pause point (stale player left highlighted, forced-on five
+// dark) — so after every re-sim we rebuild it from ground truth instead.
+const deriveOnCourt = (prefixEvents: any[]): Set<number> => {
+	const onCourt = new Set<number>();
+	for (const e of prefixEvents) {
+		if (!e) {
+			continue;
+		}
+		if (e.type === "stat" && e.s === "gs") {
+			onCourt.add(e.pid);
+		} else if (e.type === "sub") {
+			for (const pid of e.pids) {
+				onCourt.add(pid);
+			}
+			for (const pid of e.pidsOff) {
+				onCourt.delete(pid);
+			}
+		}
+	}
+	return onCourt;
+};
+
 type CoachOrder = {
 	force?: "on" | "off";
 	pt?: number;
@@ -468,9 +496,6 @@ const CoachPanel = ({
 
 	const setForce = (pid: number, force: CoachOrder["force"]) => {
 		setOrders((prev) => ({ ...prev, [pid]: { ...prev[pid], force } }));
-	};
-	const setPt = (pid: number, pt: number | undefined) => {
-		setOrders((prev) => ({ ...prev, [pid]: { ...prev[pid], pt } }));
 	};
 
 	const disabled =
@@ -508,7 +533,7 @@ const CoachPanel = ({
 	};
 
 	return (
-		<div className="card mb-3">
+		<div className="card mb-3" id="scroll-coaching">
 			<div className="card-header py-1 px-2 d-flex align-items-center">
 				<span className="fw-bold text-body-secondary small">Coach mode</span>
 				<div className="ms-auto btn-group btn-group-sm">
@@ -551,8 +576,8 @@ const CoachPanel = ({
 												<th>Player</th>
 												<th className="text-end">MIN</th>
 												<th className="text-end">PTS</th>
+												<th className="text-end">PF</th>
 												<th>Floor</th>
-												<th>PT</th>
 											</tr>
 										</thead>
 										<tbody>
@@ -576,6 +601,17 @@ const CoachPanel = ({
 														</td>
 														<td className="text-end">{Math.round(p.min)}</td>
 														<td className="text-end">{p.pts}</td>
+														<td
+															className={`text-end${
+																p.pf >= 5
+																	? " text-danger fw-bold"
+																	: p.pf >= 4
+																		? " text-warning"
+																		: ""
+															}`}
+														>
+															{p.pf}
+														</td>
 														<td>
 															<div className="btn-group btn-group-sm">
 																{(
@@ -602,30 +638,6 @@ const CoachPanel = ({
 																	</button>
 																))}
 															</div>
-														</td>
-														<td>
-															<select
-																className="form-select form-select-sm"
-																style={{ width: 90 }}
-																disabled={disabled}
-																value={
-																	order.pt === undefined ? "" : String(order.pt)
-																}
-																onChange={(event) => {
-																	const { value } = event.target;
-																	setPt(
-																		p.pid,
-																		value === "" ? undefined : Number(value),
-																	);
-																}}
-															>
-																<option value="">Auto</option>
-																<option value="0">0</option>
-																<option value="0.75">−</option>
-																<option value="1">Normal</option>
-																<option value="1.25">+</option>
-																<option value="1.75">++</option>
-															</select>
 														</td>
 													</tr>
 												);
@@ -887,7 +899,7 @@ export const LiveGame = (props: View<"liveGame">) => {
 				if (!boxScore.current.exhibition) {
 					setDirty(false);
 				}
-				onLiveSimOver();
+				onLiveSimOver(boxScore.current.gid);
 			}
 
 			const endSeconds = getSeconds(boxScore.current.time);
@@ -911,7 +923,7 @@ export const LiveGame = (props: View<"liveGame">) => {
 
 		return () => {
 			componentIsMounted.current = false;
-			onLiveSimOver();
+			onLiveSimOver(boxScore.current?.gid);
 		};
 	}, []);
 
@@ -1025,6 +1037,15 @@ export const LiveGame = (props: View<"liveGame">) => {
 				coachingScheduleRef.current = schedule;
 				allEvents.current = newEvents;
 				events.current = newEvents.slice(consumed);
+
+				// Rebuild the on-floor highlight from the canonical prefix so it can't
+				// drift across repeated re-sims (the "wrong player highlighted" bug).
+				const onCourt = deriveOnCourt(newEvents.slice(0, consumed));
+				for (const team of boxScore.current.teams) {
+					for (const p of team.players) {
+						p.inGame = onCourt.has(p.pid);
+					}
+				}
 
 				// Push the coached game to the simcast so the court view diverges too.
 				emitSimSplice(gid, newEvents);
@@ -1524,6 +1545,18 @@ export const LiveGame = (props: View<"liveGame">) => {
 									>
 										Top
 									</button>
+									{isSport("basketball") ? (
+										<button
+											className="btn btn-light-bordered"
+											onClick={() => {
+												document
+													.getElementById("scroll-coaching")
+													?.scrollIntoView();
+											}}
+										>
+											Coaching
+										</button>
+									) : null}
 									{!isSport("football") ? (
 										<>
 											<button

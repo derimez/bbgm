@@ -10,7 +10,11 @@ import {
 	trade,
 } from "../index.ts";
 import loadTeams from "./loadTeams.ts";
-import { makeLiveSimSeed, runAndStashLiveSim } from "./liveSimStash.ts";
+import {
+	makeLiveSimSeed,
+	runAndStashLiveSim,
+	takePendingLiveResult,
+} from "./liveSimStash.ts";
 import updatePlayoffSeries from "./updatePlayoffSeries.ts";
 import writeGameStats from "./writeGameStats.ts";
 import writePlayerStats, {
@@ -112,7 +116,8 @@ const play = async (
 	// Saves a vector of results objects for a day, as is output from cbSimGames
 	const cbSaveResults = async (results: GameResults[], dayOver: boolean) => {
 		// Before writeGameStats, so LeagueTopBar can not update with game result
-		if (gidOneGame !== undefined && playByPlay) {
+		const isLiveGame = gidOneGame !== undefined && playByPlay;
+		if (isLiveGame) {
 			await toUI("updateLocal", [{ liveGameInProgress: true }]);
 
 			// Run this before writing player stats
@@ -122,13 +127,30 @@ const play = async (
 			local.liveSimRatingsStatsPopoverPlayers = undefined;
 		}
 
+		// Live "coach mode": the ONE live-viewed game's stats/box/series don't
+		// commit here — they're already stashed (liveSimStash.runAndStashLiveSim)
+		// and only get written once the viewing session ends (see
+		// finalizeLiveGame, called from LiveGame.onLiveSimOver). That's what lets
+		// a mid-game coaching re-sim supersede the original before anything is
+		// persisted, instead of the pre-coaching result silently being the one
+		// that counts. Any OTHER games in this batch (not the live one) commit
+		// immediately as always.
+		const resultsToCommitNow = isLiveGame
+			? results.filter((result) => result.gid !== gidOneGame)
+			: results;
+
 		// Before writeGameStats, so injury is set correctly
-		const { injuryTexts, pidsInjuredOneGameOrLess, stopPlay } =
-			await writePlayerStats(results, conditions);
+		let injuryTexts: string[] = [];
+		let pidsInjuredOneGameOrLess: Set<number> = new Set();
+		let stopPlay = false;
+		if (resultsToCommitNow.length > 0) {
+			({ injuryTexts, pidsInjuredOneGameOrLess, stopPlay } =
+				await writePlayerStats(resultsToCommitNow, conditions));
+		}
 
 		let gameToUi: LocalStateUI["games"][number] | undefined;
 		const gidsFinished = await Promise.all(
-			results.map(async (result) => {
+			resultsToCommitNow.map(async (result) => {
 				const att = await writeTeamStats(result);
 
 				const maybeGameToUi = await writeGameStats(result, att, conditions);
@@ -139,6 +161,12 @@ const play = async (
 				return result.gid;
 			}),
 		);
+
+		// The live game WAS simulated (just not yet committed) — remove it from
+		// the schedule now too, so the day-sim loop doesn't try it again.
+		if (isLiveGame) {
+			gidsFinished.push(gidOneGame!);
+		}
 
 		// Delete finished games from schedule
 		for (const gid of gidsFinished) {
@@ -152,7 +180,9 @@ const play = async (
 
 		if (g.get("phase") === PHASE.PLAYOFFS) {
 			// Update playoff series W/L
-			await updatePlayoffSeries(results, conditions);
+			if (resultsToCommitNow.length > 0) {
+				await updatePlayoffSeries(resultsToCommitNow, conditions);
+			}
 		} else {
 			// Update clinchedPlayoffs, only if there are games left in the schedule. Otherwise, this would be inaccruate (not correctly accounting for tiebreakers) and redundant (going to be called again on phase change)
 			const schedule = await season.getSchedule();
@@ -677,6 +707,87 @@ const play = async (
 	} else {
 		await cbRunDay();
 	}
+};
+
+// Live "coach mode": commit whatever result is currently stashed for a live
+// game — the original, or the latest coaching re-sim if one was applied —
+// exactly once, when the viewing session ends. Called from
+// LiveGame.onLiveSimOver (both on natural game-over AND on navigating away
+// mid-game, since either way no further coaching changes are coming). A no-op
+// if there's nothing pending (already finalized, or the worker restarted and
+// lost the stash — in that case the ORIGINAL result was never even simmed
+// this session, so there's nothing to commit; this only happens if the tab
+// was closed before ever finishing a live game, an edge case pre-existing
+// this feature too).
+export const finalizeLiveGame = async (gid: number, conditions: Conditions) => {
+	const result = takePendingLiveResult(gid);
+	if (!result) {
+		return;
+	}
+
+	const { injuryTexts, stopPlay } = await writePlayerStats(
+		[result],
+		conditions,
+	);
+
+	const att = await writeTeamStats(result);
+	await writeGameStats(result, att, conditions);
+
+	if (g.get("phase") === PHASE.PLAYOFFS) {
+		await updatePlayoffSeries([result], conditions);
+
+		// Coach-mode deferral fix (phantom Game 7): a live game's series result is
+		// committed HERE, not in cbSaveResults — but cbSaveResults already ran
+		// season.newSchedulePlayoffsDay() beforehand, against the pre-clinch series
+		// state. So when the live-watched game clinches a series, that earlier
+		// scheduling still saw the series as active and queued a phantom next game
+		// (e.g. a Finals "Game 7" after a 4-2 win). Now that the clinch is
+		// recorded, delete any scheduled game whose series is decided. This can
+		// only ever remove ghosts: a series with a team at numGamesToWin is over,
+		// so it must not have a game on the schedule.
+		const playoffSeries = await idb.cache.playoffSeries.get(g.get("season"));
+		if (playoffSeries && playoffSeries.currentRound >= 0) {
+			const rnd = playoffSeries.currentRound;
+			const numGamesToWin = helpers.numGamesToWinSeries(
+				g.get("numGamesPlayoffSeries", "current")[rnd],
+			);
+			const roundSeries = playoffSeries.series[rnd] ?? [];
+			const scheduleGames = await idb.cache.schedule.getAll();
+			for (const sg of scheduleGames) {
+				const matchup = roundSeries.find(
+					(s) =>
+						!!s.away &&
+						((s.home.tid === sg.homeTid && s.away.tid === sg.awayTid) ||
+							(s.home.tid === sg.awayTid && s.away.tid === sg.homeTid)),
+				);
+				if (
+					matchup &&
+					(matchup.home.won >= numGamesToWin ||
+						(!!matchup.away && matchup.away.won >= numGamesToWin))
+				) {
+					await idb.cache.schedule.delete(sg.gid);
+					await toUI("deleteGames", [[sg.gid]]);
+				}
+			}
+		}
+	}
+
+	local.seasonLeaders = undefined;
+
+	if (injuryTexts.length > 0) {
+		logEvent(
+			{
+				type: "injuredList",
+				text: injuryTexts.join("<br>"),
+				showNotification: true,
+				persistent: stopPlay,
+				saveToDb: false,
+			},
+			conditions,
+		);
+	}
+
+	await idb.cache.flush();
 };
 
 export default play;

@@ -127,10 +127,38 @@ const getSnapshotHistory = (lid, limit = 10) => {
 
 // ── Cross-device sync v2 (keyed by syncId) ──────────────────────────────────
 
+// Box scores ("games" store) are split OUT of the snapshot and parked here,
+// one file per league. They balloon a dynasty to tens of MB and grow every sim,
+// so we keep them out of the 30-deep snapshot history (which would multiply the
+// bloat) and instead overwrite a single per-league file the Assistant GM reads.
+const BOX_DIR = path.join(DATA_DIR, "boxscores");
+
+const boxScoresFileFor = (syncId) =>
+	path.join(BOX_DIR, `${String(syncId).replace(/[^\w.-]/g, "_")}.json`);
+
+// Pull the heavy `games` store out of a sync payload. Returns the slim league
+// JSON string to actually store; writes the box scores to the per-league file.
+// Never throws — on any problem (parse error, no games) it returns the payload
+// unchanged, so a slim export (games already absent) still works exactly as before.
+const splitBoxScores = (syncId, data) => {
+	try {
+		const league = JSON.parse(data);
+		if (!Array.isArray(league.games) || league.games.length === 0) return data;
+		const games = league.games;
+		delete league.games;
+		fs.mkdirSync(BOX_DIR, { recursive: true });
+		fs.writeFileSync(boxScoresFileFor(syncId), JSON.stringify(games));
+		return JSON.stringify(league);
+	} catch (err) {
+		console.error(`[sync] box-score split failed for ${syncId}:`, err.message);
+		return data;
+	}
+};
+
 // Save a snapshot under a stable syncId. meta carries display/identity fields
 // so the dashboard pull-picker can tell leagues apart (they're often all named
 // the same team). lid is stored only for debugging/back-compat.
-const saveSnapshotV2 = db.transaction((syncId, data, meta = {}) => {
+const saveSnapshotV2Tx = db.transaction((syncId, data, meta = {}) => {
 	const now = Date.now();
 	db.prepare(
 		"INSERT INTO league_snapshots (lid, sync_id, saved_at, size, data) VALUES (?, ?, ?, ?, ?)",
@@ -161,6 +189,11 @@ const saveSnapshotV2 = db.transaction((syncId, data, meta = {}) => {
 
 	return now;
 });
+
+// Split box scores out of the payload (heavy parse, kept OUTSIDE the DB
+// transaction) then store the slim league. Same signature/return as before.
+const saveSnapshotV2 = (syncId, data, meta = {}) =>
+	saveSnapshotV2Tx(syncId, splitBoxScores(syncId, data), meta);
 
 const getLatestBySyncId = (syncId) =>
 	db
@@ -288,6 +321,7 @@ export {
 	listLeagues,
 	getSnapshotHistory,
 	saveSnapshotV2,
+	boxScoresFileFor,
 	getLatestBySyncId,
 	getSyncMeta,
 	listSyncLeagues,

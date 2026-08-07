@@ -22,3 +22,40 @@ __pycache__/
 # server/scripts/standardize-courts.py. manifest.json is kept (text config).
 /server/public/courts/*
 !/server/public/courts/manifest.json
+
+# Radio broadcast TTS (Phase 3) — Kokoro venv (~222M) + ONNX weights (~338M).
+# Both regenerable: `python3 -m venv server/tts/venv && venv/bin/pip install
+# kokoro-onnx soundfile`, then re-download the model files. kokoro_tts.py stays.
+/server/tts/venv/
+/server/tts/models/
+
+# Chatterbox/Demucs venvs + voice refs — 23G total, added after the rules above
+# and never covered by them. A single `git add -A` here stages an 18G venv and
+# GitHub hard-rejects any blob >100MB. All regenerable; the .py files stay tracked.
+/server/tts/venv-chatterbox/
+/server/tts/venv-demucs/
+/server/tts/refs/
+
+# Secrets & local data. This started as a ZenGM fork with no secrets of its own,
+# so none of these rules existed. Nothing has leaked (verified 2026-07-09), but
+# the server now reads env config — keep it that way.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+secrets.json
+*.db
+*.sqlite
+*.sqlite3
+
+# TTS runtime assets — added 2026-08-06, when the nightly auto-backup was extended
+# to cover this repo. 1.1 GB total, and kokoro-v1.0.onnx alone is 310 MiB against
+# GitHub's 100 MiB hard blob limit, so committing it would fail the push AND poison
+# every later push on this branch. Models are re-downloadable; venv/refs are local.
+# The .py drivers above this dir stay tracked — only the heavy artifacts are ignored.
+/server/tts/models/
+/server/tts/refs/
+/server/tts/venv/
+/server/tts/__pycache__/

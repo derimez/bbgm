@@ -209,9 +209,44 @@ const getBasicInfo = async ({
 			basicInfo.name = value.name;
 		}
 
-		// Need to store max gid from games, so generated schedule does not overwrite it
+		// Need to store max gid from games, so generated schedule does not overwrite it.
+		// games is often the ONE huge store an export/sync payload trims to save
+		// space (e.g. this fork's cross-device sync splits it out of the stored
+		// snapshot for size). When it's absent, maxGid must not silently fall back
+		// to -1 — that renumbers every schedule entry starting near 0, colliding
+		// with real game ids and corrupting box score history on import. So also
+		// scan playoffSeries.gids (every playoff game id ever played, present in
+		// every export regardless of whether games itself was trimmed) as a floor.
 		if (key === "games" && value.gid > basicInfo.maxGid) {
 			basicInfo.maxGid = value.gid;
+		}
+		if (key === "playoffSeries") {
+			for (const round of value.series ?? []) {
+				for (const series of round ?? []) {
+					for (const gid of series?.gids ?? []) {
+						if (gid > basicInfo.maxGid) {
+							basicInfo.maxGid = gid;
+						}
+					}
+				}
+			}
+			for (const playIn of value.playIns ?? []) {
+				for (const series of playIn ?? []) {
+					for (const gid of series?.gids ?? []) {
+						if (gid > basicInfo.maxGid) {
+							basicInfo.maxGid = gid;
+						}
+					}
+				}
+			}
+		}
+		// Not-yet-played games also carry a pre-assigned gid (e.g. a scheduled but
+		// unplayed Game 7) that createStream.ts will otherwise happily reuse —
+		// count it too so the regenerated schedule starts past it, not on top of it.
+		if (key === "schedule" && typeof value.gid === "number") {
+			if (value.gid > basicInfo.maxGid) {
+				basicInfo.maxGid = value.gid;
+			}
 		}
 
 		if (key === "players" && value.contract?.rookie) {

@@ -35,10 +35,12 @@ const Chart = ({
 	rows,
 	metric,
 	width,
+	leagueBySeason,
 }: {
 	rows: TrendRow[];
 	metric: (typeof METRICS)[number];
 	width: number;
+	leagueBySeason?: Record<number, Record<string, number>>;
 }) => {
 	const HEIGHT = 280;
 	const margin = { top: 12, left: 52, right: 16, bottom: 36 };
@@ -58,8 +60,25 @@ const Chart = ({
 		value: (r as any)[metric.stat] as number,
 	}));
 
+	// League-average series, aligned to the player's seasons (only where we have
+	// a value for this metric that season).
+	const leagueData = leagueBySeason
+		? data
+				.map((d) => ({
+					season: d.season,
+					value: leagueBySeason[d.season]?.[metric.stat],
+				}))
+				.filter(
+					(d): d is { season: number; value: number } =>
+						typeof d.value === "number" && Number.isFinite(d.value),
+				)
+		: [];
+
 	const xVals = data.map((d) => d.season);
-	const yVals = data.map((d) => d.value);
+	const yVals = [
+		...data.map((d) => d.value),
+		...leagueData.map((d) => d.value),
+	];
 	const yMin = Math.min(0, ...yVals);
 	const yMax = Math.max(...yVals, 1);
 
@@ -92,6 +111,32 @@ const Chart = ({
 						tickFormat={(v) => String(v)}
 						tickLabelProps={{ fontSize: "0.85em" }}
 					/>
+					{/* League-average line, drawn behind the player's line */}
+					{leagueData.length > 0 ? (
+						<>
+							<LinePath
+								data={leagueData}
+								x={(d) => xScale(d.season)}
+								y={(d) => yScale(d.value)}
+								stroke="var(--bs-secondary-color)"
+								strokeWidth={2}
+								strokeDasharray="5 4"
+							/>
+							{leagueData.map((d, i) => (
+								<Circle
+									key={`lg-${i}`}
+									cx={xScale(d.season)}
+									cy={yScale(d.value)}
+									r={3}
+									fill="var(--bs-secondary-color)"
+								>
+									<title>
+										League avg {d.season}: {metric.format(d.value)}
+									</title>
+								</Circle>
+							))}
+						</>
+					) : null}
 					<LinePath
 						data={data}
 						x={(d) => xScale(d.season)}
@@ -122,6 +167,37 @@ const Chart = ({
 					})}
 				</Group>
 			</svg>
+			{leagueData.length > 0 ? (
+				<div className="d-flex justify-content-center gap-3 small text-body-secondary">
+					<span>
+						<svg width={22} height={8} className="me-1">
+							<line
+								x1={0}
+								y1={4}
+								x2={22}
+								y2={4}
+								stroke="var(--bs-blue)"
+								strokeWidth={2.5}
+							/>
+						</svg>
+						{metric.name}
+					</span>
+					<span>
+						<svg width={22} height={8} className="me-1">
+							<line
+								x1={0}
+								y1={4}
+								x2={22}
+								y2={4}
+								stroke="var(--bs-secondary-color)"
+								strokeWidth={2}
+								strokeDasharray="5 4"
+							/>
+						</svg>
+						League avg
+					</span>
+				</div>
+			) : null}
 			{tooltipOpen && tooltipData ? (
 				<TooltipWithBounds left={tooltipLeft} top={tooltipTop}>
 					<b>{tooltipData.season}</b>:{" "}
@@ -132,7 +208,13 @@ const Chart = ({
 	);
 };
 
-const CareerTrend = ({ rows }: { rows: TrendRow[] }) => {
+const CareerTrend = ({
+	rows,
+	leagueBySeason,
+}: {
+	rows: TrendRow[];
+	leagueBySeason?: Record<number, Record<string, number>>;
+}) => {
 	const [statIndex, setStatIndex] = useState(0);
 	const metric = METRICS[statIndex]!;
 
@@ -160,7 +242,14 @@ const CareerTrend = ({ rows }: { rows: TrendRow[] }) => {
 			</div>
 			<ParentSize>
 				{({ width }) =>
-					width > 0 ? <Chart rows={rows} metric={metric} width={width} /> : null
+					width > 0 ? (
+						<Chart
+							rows={rows}
+							metric={metric}
+							width={width}
+							leagueBySeason={leagueBySeason}
+						/>
+					) : null
 				}
 			</ParentSize>
 		</div>
