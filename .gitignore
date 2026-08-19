@@ -59,3 +59,39 @@ secrets.json
 /server/tts/refs/
 /server/tts/venv/
 /server/tts/__pycache__/
+
+# === security hardening (2026-08-19) ===
+# OAuth / service credentials
+credentials.json
+client_secret*.json
+service-account*.json
+serviceaccount*.json
+token.json
+*.token.json
+.netrc
+
+# SSH & signing keys
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# Certificates
+*.crt
+*.cer
+*.der
+
+# DB backups (plain *.sql deliberately NOT ignored - migrations are tracked)
+*.db.bak*
+*.db-backup*
+*.sqlite.bak*
+*.sql.gz
+*.dump
+
+# OS noise
+.DS_Store
+Thumbs.db
