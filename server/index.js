@@ -1,6 +1,5 @@
 import express from "express";
 import { createServer } from "node:http";
-import { WebSocketServer } from "ws";
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -60,8 +59,10 @@ const PORT = process.env.PORT ?? 3018;
 const app = express();
 const server = createServer(app);
 
-// WebSocket server for simcast events (Phase 3)
-const wss = new WebSocketServer({ server, path: "/api/simcast" });
+// Simcast (the live court view) was RETIRED 2026-09-14 — the 778 MB of court
+// renders are gone and the /api/simcast WebSocket no longer exists. The sim
+// worker still POSTs game events here because recaps (Phase 4) are built from
+// them; `broadcast()` below fans out to this always-empty set, i.e. a no-op.
 const simcastClients = new Set();
 
 // Latest gameStart packet — replayed to clients that connect mid-game
@@ -75,17 +76,6 @@ const recentEvents = [];
 // post-game recap (the recentEvents ring buffer above is capped and only feeds
 // late-joiner catch-up). Reset on every gameStart.
 let gameEventLog = [];
-
-wss.on("connection", (ws) => {
-	simcastClients.add(ws);
-	if (lastGameStart) {
-		ws.send(JSON.stringify({ kind: "gameStart", ...lastGameStart }));
-		for (const ev of recentEvents) {
-			ws.send(JSON.stringify({ kind: "event", ...ev }));
-		}
-	}
-	ws.on("close", () => simcastClients.delete(ws));
-});
 
 const broadcast = (msg) => {
 	const str = JSON.stringify(msg);
@@ -941,20 +931,7 @@ app.post("/api/tts", async (req, res) => {
 	}
 });
 
-// ── Phase 2 animation spike — standalone Pixi.js viewer ─────────────────────
-app.get("/simcast-spike", (_req, res) => {
-	res.sendFile(path.join(__dirname, "public", "simcast-spike.html"));
-});
-app.use(
-	"/simcast-spike/static",
-	express.static(path.join(__dirname, "public")),
-);
-
-// ── Phase 3 live simcast viewer ─────────────────────────────────────────────
-app.get("/simcast", (_req, res) => {
-	res.sendFile(path.join(__dirname, "public", "simcast.html"));
-});
-app.use("/simcast/static", express.static(path.join(__dirname, "public")));
+// /simcast and /simcast-spike (Phase 2/3 court viewer) retired 2026-09-14.
 
 // ── Static: serve ZenGM build ─────────────────────────────────────────────────
 app.use(express.static(BUILD_DIR));
@@ -978,5 +955,4 @@ server.listen(PORT, "0.0.0.0", () => {
 	console.log(`BBGM server running on :${PORT}`);
 	console.log(`  Game:    http://localhost:${PORT}/`);
 	console.log(`  Sync:    http://localhost:${PORT}/api/sync`);
-	console.log(`  WS:      ws://localhost:${PORT}/api/simcast`);
 });

@@ -6,18 +6,20 @@
 //   - CLYDE  → color analyst (Walt "Clyde" Frazier style): sparse, vivid color.
 //
 // The transcript's deterministic `plays` are chunked (per quarter, then capped
-// at N plays) and each chunk is handed to a local Ollama model, which returns
-// prefixed announcer lines we parse into ordered utterances. Every chunk has a
-// deterministic fallback (the raw play-by-play text) so a model/network failure
+// at N plays) and each chunk is handed to Claude, which returns prefixed
+// announcer lines we parse into ordered utterances. Every chunk has a
+// deterministic fallback (the raw play-by-play text) so a model failure
 // degrades one segment to plain PBP instead of losing the game.
 //
-// Reuses the exact Ollama pattern from server/recap.js: /api/chat, think:false,
-// qwen3:8b. No BBGM rebuild required — this is server-side only. The output is
-// the canonical source the later TTS + in-app player stages read from.
+// Shares server/claude-llm.js with recap.js. No BBGM rebuild required — this is
+// server-side only. The output is the canonical source the later TTS + in-app
+// player stages read from.
 
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { claudeText } from "./claude-llm.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT_DIR = path.join(
@@ -29,10 +31,10 @@ const SCRIPT_DIR = path.join(
 );
 fs.mkdirSync(SCRIPT_DIR, { recursive: true });
 
-const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
-// Same model recap.js settled on — qwen3:8b via /api/chat + think:false emits
-// clean prose with no reasoning traces. Override with BBGM_BROADCAST_MODEL.
-const SCRIPT_MODEL = process.env.BBGM_BROADCAST_MODEL ?? "qwen3:8b";
+// Was qwen3:8b on local Ollama until 2026-09-05, when Ollama was retired with
+// the Mac mini migration. Chunked per game, so haiku by default; override with
+// BBGM_BROADCAST_MODEL=sonnet for richer color.
+const SCRIPT_MODEL = process.env.BBGM_BROADCAST_MODEL ?? "haiku";
 const CHUNK_TIMEOUT_MS = Number(
 	process.env.BBGM_BROADCAST_TIMEOUT_MS ?? 90_000,
 );
@@ -275,32 +277,14 @@ function fallbackUtterances(chunk) {
 		.map((p) => ({ voice: "pbp", text: p.text }));
 }
 
-// ── Ollama ────────────────────────────────────────────────────────────────
+// ── Claude ────────────────────────────────────────────────────────────────
 
-async function callOllama(prompt) {
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), CHUNK_TIMEOUT_MS);
-	try {
-		const resp = await fetch(`${OLLAMA_URL}/api/chat`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				model: SCRIPT_MODEL,
-				messages: [{ role: "user", content: prompt }],
-				stream: false,
-				think: false,
-				options: { temperature: 0.8, num_predict: 700 },
-			}),
-			signal: controller.signal,
-		});
-		if (!resp.ok) {
-			throw new Error(`Ollama ${resp.status}: ${await resp.text()}`);
-		}
-		const json = await resp.json();
-		return json.message?.content ?? "";
-	} finally {
-		clearTimeout(timer);
-	}
+async function callClaude(prompt) {
+	return claudeText(prompt, {
+		model: SCRIPT_MODEL,
+		timeoutMs: CHUNK_TIMEOUT_MS,
+		budgetUsd: 0.1,
+	});
 }
 
 // ── Build ──────────────────────────────────────────────────────────────────
@@ -331,7 +315,7 @@ export async function buildScript(broadcast, opts = {}) {
 		const chunk = chunks[i];
 		let utterances;
 		try {
-			const raw = await callOllama(buildChunkPrompt(chunk, ctx));
+			const raw = await callClaude(buildChunkPrompt(chunk, ctx));
 			utterances = thinColor(parseTwoVoice(raw));
 			if (!utterances.length) {
 				utterances = fallbackUtterances(chunk);

@@ -173,36 +173,11 @@ function countUtterances(scriptPath) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Ollama shares the RX 6800's 16 GiB and runs with OLLAMA_KEEP_ALIVE=-1, so
-// models it has loaded stay resident indefinitely (GM chat answers fast). Two
-// resident models leave well under a GiB free — not enough for Chatterbox's
-// torch-ROCm context, and the allocation wedges the card's compute rather than
-// failing cleanly. Evict before a long render; Ollama reloads on its next call.
-const OLLAMA_HOST = process.env.OLLAMA_HOST ?? "http://127.0.0.1:11434";
-
-async function evictOllamaModels() {
-	if (process.env.BBGM_TTS_EVICT_OLLAMA === "0") return;
-	try {
-		const res = await fetch(`${OLLAMA_HOST}/api/ps`, {
-			signal: AbortSignal.timeout(5000),
-		});
-		const { models = [] } = await res.json();
-		for (const m of models) {
-			const name = m.model ?? m.name;
-			console.log(`[broadcast-audio] evicting ollama model ${name}`);
-			await fetch(`${OLLAMA_HOST}/api/generate`, {
-				method: "POST",
-				headers: { "content-type": "application/json" },
-				body: JSON.stringify({ model: name, keep_alive: 0 }),
-				signal: AbortSignal.timeout(30000),
-			});
-		}
-		if (models.length) await sleep(2000); // let the driver reclaim the VRAM
-	} catch (err) {
-		// Best effort — a busy or absent Ollama must never block a render.
-		console.error(`[broadcast-audio] ollama evict skipped: ${err.message}`);
-	}
-}
+// 2026-09-05: this file used to evict Ollama's resident models before a render
+// — Ollama and Chatterbox shared the RX 6800's 16 GiB and two resident models
+// left too little VRAM for torch-ROCm. Both are gone with the Mac mini
+// migration (no Ollama, no discrete GPU), so the eviction step was removed.
+// BBGM_TTS_EVICT_OLLAMA is no longer read.
 
 // Chunked, resumable Chatterbox render: emit per-utterance wavs in batches
 // (retrying a batch on GPU hang), then assemble (no GPU) into the final file.
@@ -225,7 +200,6 @@ async function renderChunked(
 	}, 1000);
 
 	try {
-		await evictOllamaModels();
 		for (let start = 0; start < total; start += CHUNK_SIZE) {
 			let ok = false;
 			let lastErr;
@@ -254,9 +228,7 @@ async function renderChunked(
 					console.error(
 						`[broadcast-audio] gid=${gid} chunk@${start} attempt ${attempt + 1}/${CHUNK_RETRIES + 1}: ${err.message}`,
 					);
-					// A wedge is most often VRAM starvation — reclaim before retrying.
-					await evictOllamaModels();
-					await sleep(4000); // let the GPU settle before a fresh process
+					await sleep(4000); // let the renderer settle before a fresh process
 				}
 			}
 			if (!ok) {

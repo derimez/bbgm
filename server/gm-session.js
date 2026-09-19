@@ -22,8 +22,8 @@ import {
 
 const CLAUDE_BIN =
 	process.env.GM_CLAUDE_BIN ||
-	"/home/derin/.nvm/versions/node/v24.14.1/bin/claude";
-const NODE_BIN_DIR = "/home/derin/.nvm/versions/node/v24.14.1/bin";
+	"/Users/derin/.nvm/versions/node/v24.14.1/bin/claude";
+const NODE_BIN_DIR = "/Users/derin/.nvm/versions/node/v24.14.1/bin";
 
 // Two tiers: Opus for decisions/analysis, Sonnet for quick factual lookups.
 // Every turn spawns a full Claude session that reads the (multi-MB) league

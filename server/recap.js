@@ -5,16 +5,16 @@
 //      raw event stream. Event semantics are kept IN SYNC with the interpreter in
 //      server/public/simcast.html (the made-FG list + point values below mirror
 //      its scoring switch). If BBGM's event taxonomy changes, update both.
-//   2. generateRecap() — feed a compact game summary to a local Ollama model and
-//      return a 2–3 paragraph sports-reporter recap. Network/model failures throw;
-//      the caller (index.js) swallows them so a recap is best-effort, never fatal.
+//   2. generateRecap() — feed a compact game summary to Claude and return a 2–3
+//      paragraph sports-reporter recap. Model failures throw; the caller
+//      (index.js) swallows them so a recap is best-effort, never fatal.
 
-const OLLAMA_URL = process.env.OLLAMA_URL ?? "http://localhost:11434";
-// Plan decision #15 locked qwen2.5:7b, but it isn't pulled locally. qwen3:8b is
-// installed and, via /api/chat with think:false, produces clean prose with no
-// reasoning traces. (qwen3-fast's Modelfile is broken — it emits empty output.)
-// Override with BBGM_RECAP_MODEL if you later pull qwen2.5:7b.
-const RECAP_MODEL = process.env.BBGM_RECAP_MODEL ?? "qwen3:8b";
+import { claudeText } from "./claude-llm.js";
+
+// Was qwen3:8b on local Ollama until 2026-09-05, when Ollama was retired with
+// the Mac mini migration. haiku is the default because recaps are per-game and
+// high-volume; set BBGM_RECAP_MODEL=sonnet for better prose.
+const RECAP_MODEL = process.env.BBGM_RECAP_MODEL ?? "haiku";
 const RECAP_TIMEOUT_MS = Number(process.env.BBGM_RECAP_TIMEOUT_MS ?? 60_000);
 
 // Made-FG event types → point value. Mirrors simcast.html lines ~2323-2340.
@@ -169,48 +169,27 @@ ${line(1)}
 Write a punchy 2-3 paragraph recap in a professional sports-reporter voice. Lead with the result and the standout performer. Do not invent stats, quotes, dates, or storylines beyond what the numbers support. No headline, no markdown — just the prose.`;
 }
 
-// Defensively strip any reasoning artifacts some qwen3 variants prepend even
-// with think:false (e.g. a leading "Assistant" line or empty <think></think>).
+// Strip any preamble the model prepends (e.g. a leading "Assistant" line).
 function cleanOutput(raw) {
 	return (raw ?? "")
-		.replace(/<think>[\s\S]*?<\/think>/gi, "")
 		.replace(/^\s*assistant\s*/i, "")
 		.trim();
 }
 
 /**
- * Generate recap prose via Ollama. Throws on network/model/timeout failure.
+ * Generate recap prose via Claude. Throws on model/timeout failure.
  * @returns {Promise<{text: string, model: string}>}
  */
 export async function generateRecap(box, meta = {}) {
 	const prompt = buildPrompt(box, meta);
-	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), RECAP_TIMEOUT_MS);
-	try {
-		// Use /api/chat (not /api/generate) — qwen3 chat models need it. think:false
-		// suppresses reasoning so recap_text is clean prose.
-		const resp = await fetch(`${OLLAMA_URL}/api/chat`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				model: RECAP_MODEL,
-				messages: [{ role: "user", content: prompt }],
-				stream: false,
-				think: false,
-				options: { temperature: 0.7, num_predict: 600 },
-			}),
-			signal: controller.signal,
-		});
-		if (!resp.ok) {
-			throw new Error(`Ollama ${resp.status}: ${await resp.text()}`);
-		}
-		const json = await resp.json();
-		const text = cleanOutput(json.message?.content ?? "");
-		if (!text) throw new Error("Ollama returned empty response");
-		return { text, model: RECAP_MODEL };
-	} finally {
-		clearTimeout(timer);
-	}
+	const raw = await claudeText(prompt, {
+		model: RECAP_MODEL,
+		timeoutMs: RECAP_TIMEOUT_MS,
+		budgetUsd: 0.1,
+	});
+	const text = cleanOutput(raw);
+	if (!text) throw new Error("claude returned empty recap");
+	return { text, model: RECAP_MODEL };
 }
 
-export { RECAP_MODEL, OLLAMA_URL };
+export { RECAP_MODEL };
